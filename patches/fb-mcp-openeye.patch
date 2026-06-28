@@ -1,0 +1,210 @@
+diff --git a/scraper.py b/scraper.py
+index 45817f2..c7eb410 100644
+--- a/scraper.py
++++ b/scraper.py
+@@ -16,6 +16,8 @@ Default delays are implemented to encourage responsible usage.
+ 
+ import asyncio
+ import json
++import os
++import random
+ import re
+ import sys
+ from dataclasses import dataclass, asdict
+@@ -152,12 +154,28 @@ def extract_listings_from_page_sync(page: SyncPage) -> list[MarketplaceListing]:
+     return listings
+ 
+ 
+-def _build_url(query: str, location_id: str, locale: str, days_listed: Optional[int]) -> str:
+-    """Build the marketplace search URL."""
++def _build_url(query: str, location_id: str, locale: str, days_listed: Optional[int],
++               max_price: Optional[int] = None, radius_km: Optional[int] = None,
++               latitude: Optional[float] = None, longitude: Optional[float] = None) -> str:
++    """Build the marketplace search URL.
++
++    max_price: OpenEye addition — Facebook's `maxPrice` filter. Pass 0 to sweep for
++    FREE items only (e.g. a free RTX 4090 / Aeron). Omitted -> no price ceiling.
++
++    radius_km / latitude / longitude: OpenEye addition — best-effort geographic widening.
++    Facebook honors radius most reliably when an explicit lat/long is supplied alongside it;
++    with only the city slug it may ignore radius. No harm if ignored — the slug still works.
++    """
+     encoded_query = quote(query)
+     url = f"https://www.facebook.com/marketplace/{location_id}/search?query={encoded_query}&locale={locale}"
+     if days_listed is not None:
+         url += f"&daysSinceListed={days_listed}"
++    if max_price is not None:
++        url += f"&maxPrice={max_price}"
++    if radius_km is not None:
++        url += f"&radiusKM={radius_km}"
++    if latitude is not None and longitude is not None:
++        url += f"&latitude={latitude}&longitude={longitude}"
+     return url
+ 
+ 
+@@ -167,13 +185,14 @@ async def scrape_marketplace_async(
+     locale: str = "en_GB",
+     days_listed: Optional[int] = None,
+     headless: bool = True,
++    max_price: Optional[int] = None,
+ ) -> list[MarketplaceListing]:
+     """
+     Scrape Facebook Marketplace search results (async version).
+ 
+     Use this when calling from an async context (e.g., MCP server).
+     """
+-    url = _build_url(query, location_id, locale, days_listed)
++    url = _build_url(query, location_id, locale, days_listed, max_price)
+ 
+     async with async_playwright() as p:
+         browser = await p.chromium.launch(headless=headless)
+@@ -366,21 +385,40 @@ def scrape_marketplace(
+     days_listed: Optional[int] = None,
+     headless: bool = True,
+     debug: bool = False,
++    max_price: Optional[int] = None,
++    scroll_rounds: int = 0,
++    radius_km: Optional[int] = None,
++    latitude: Optional[float] = None,
++    longitude: Optional[float] = None,
+ ) -> list[MarketplaceListing]:
+     """
+     Scrape Facebook Marketplace search results (sync version).
+ 
+     Use this for CLI usage or non-async contexts.
++
++    scroll_rounds: OpenEye addition — how many times to scroll to lazy-load more results
++    (deeper than page 1). Each scroll is followed by a randomized pause to pace requests
++    and avoid bot detection. 0 = no scroll (original behaviour).
++    radius_km/latitude/longitude: OpenEye addition — best-effort geographic widening.
+     """
+-    url = _build_url(query, location_id, locale, days_listed)
++    url = _build_url(query, location_id, locale, days_listed, max_price,
++                     radius_km, latitude, longitude)
++    _UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
++    profile = os.environ.get('FB_PROFILE_DIR')  # OpenEye: persistent logged-in session if set
+ 
+     with sync_playwright() as p:
+-        browser = p.chromium.launch(headless=headless)
+-        context = browser.new_context(
+-            viewport={'width': 1920, 'height': 1080},
+-            user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+-        )
+-        page = context.new_page()
++        if profile:
++            # Reuse a saved, logged-in profile (cookies persist) — fewer walls, deeper results.
++            context = p.chromium.launch_persistent_context(
++                profile, headless=headless,
++                viewport={'width': 1920, 'height': 1080}, user_agent=_UA)
++            browser = None
++            page = context.new_page()
++        else:
++            browser = p.chromium.launch(headless=headless)
++            context = browser.new_context(
++                viewport={'width': 1920, 'height': 1080}, user_agent=_UA)
++            page = context.new_page()
+ 
+         try:
+             page.goto(url, wait_until='networkidle', timeout=30000)
+@@ -408,6 +446,12 @@ def scrape_marketplace(
+             # This helps respect Facebook's servers and reduces load
+             page.wait_for_timeout(3000)
+ 
++            # OpenEye: paced scrolling to load results beyond the first page. Randomized
++            # pauses (human-like, jittered) keep request cadence below bot-detection radar.
++            for _i in range(scroll_rounds):
++                page.mouse.wheel(0, random.randint(4000, 6500))
++                page.wait_for_timeout(random.randint(1800, 3800))
++
+             if debug:
+                 page.screenshot(path='debug_screenshot.png')
+                 with open('debug_page.html', 'w') as f:
+@@ -425,11 +469,39 @@ def scrape_marketplace(
+             raise e
+ 
+         finally:
+-            browser.close()
++            context.close()
++            if browser:
++                browser.close()
+ 
+     return listings
+ 
+ 
++def login():
++    """OpenEye: one-time interactive Facebook login into a persistent profile.
++
++    Opens a visible Chromium using FB_PROFILE_DIR. Log in once; cookies persist there,
++    so subsequent (headless) scrapes reuse the session — fewer walls, deeper results.
++    """
++    profile = os.environ.get('FB_PROFILE_DIR')
++    if not profile:
++        print("Set FB_PROFILE_DIR to a folder path first (it will store the saved session).")
++        sys.exit(1)
++
++    with sync_playwright() as p:
++        context = p.chromium.launch_persistent_context(
++            profile, headless=False, viewport={'width': 1280, 'height': 900})
++        page = context.pages[0] if context.pages else context.new_page()
++        page.goto("https://www.facebook.com/login", wait_until='domcontentloaded')
++        print(f"\nA browser opened. Log in to Facebook, then come back here and press Enter.")
++        print(f"(Session will be saved to: {profile})")
++        try:
++            input()
++        except EOFError:
++            page.wait_for_timeout(120000)
++        context.close()
++    print("Login session saved. Set FB_PROFILE_DIR in your .env and future scans reuse it.")
++
++
+ def main():
+     """CLI entry point."""
+     import argparse
+@@ -438,12 +510,35 @@ def main():
+     parser.add_argument('query', nargs='?', default='brewing fermenter', help='Search query')
+     parser.add_argument('--location', default='108339199186201', help='Facebook location ID')
+     parser.add_argument('--days', type=int, help='Only show listings from the last N days (e.g., 1, 7, 30)')
++    parser.add_argument('--max-price', type=int, default=None,
++                        help='OpenEye: Facebook maxPrice filter. Use 0 to sweep FREE items only.')
++    parser.add_argument('--scroll', type=int, default=0,
++                        help='OpenEye: scroll N times to load more results (paced, jittered). 0 = page 1 only.')
++    parser.add_argument('--radius-km', type=int, default=None,
++                        help='OpenEye: best-effort geographic radius in km (works best with --lat/--lng).')
++    parser.add_argument('--lat', type=float, default=None, help='OpenEye: latitude for radius widening.')
++    parser.add_argument('--lng', type=float, default=None, help='OpenEye: longitude for radius widening.')
++    parser.add_argument('--login', action='store_true',
++                        help='OpenEye: one-time interactive login into FB_PROFILE_DIR, then exit.')
++    parser.add_argument('--details', metavar='LISTING_ID', default=None,
++                        help='OpenEye: fetch full details (description/condition) for one listing id and exit.')
+     parser.add_argument('--debug', action='store_true', help='Save debug screenshot and HTML')
+     parser.add_argument('--no-headless', action='store_true', help='Show browser window')
+     parser.add_argument('--json', action='store_true', help='Output as JSON')
+ 
+     args = parser.parse_args()
+ 
++    # OpenEye: one-time login into the persistent profile, then exit.
++    if args.login:
++        login()
++        return
++
++    # OpenEye: detail mode — fetch one listing's description/condition as JSON, then exit.
++    if args.details:
++        details = asyncio.run(get_listing_details_async(args.details, headless=not args.no_headless))
++        print(json.dumps(asdict(details), indent=2))
++        return
++
+     print(f"Searching for: {args.query}")
+     print("-" * 50)
+ 
+@@ -454,6 +549,11 @@ def main():
+             days_listed=args.days,
+             headless=not args.no_headless,
+             debug=args.debug,
++            max_price=args.max_price,
++            scroll_rounds=args.scroll,
++            radius_km=args.radius_km,
++            latitude=args.lat,
++            longitude=args.lng,
+         )
+ 
+         if not listings:

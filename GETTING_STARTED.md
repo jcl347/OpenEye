@@ -27,10 +27,15 @@ read, and intent-classified by Claude (no brittle regex). This guide covers setu
 
 ## 2. One-time setup
 
-### 2a. Clone the Facebook MCP
+### 2a. Clone the Facebook MCP and apply OpenEye's patch
 ```powershell
 git clone https://github.com/fisheyes/mcp-facebook-market-place C:\path\to\mcp-facebook-market-place
+cd C:\path\to\mcp-facebook-market-place
+git checkout 81a9f46                                    # base the patch was made against
+git apply C:\path\to\OpenEye\patches\fb-mcp-openeye.patch
 ```
+The patch adds the free sweep, listing details, scrolling, radius, and persistent login that
+OpenEye depends on. See [patches/README.md](patches/README.md) for details and conflict handling.
 
 ### 2b. Configure `.env`
 ```powershell
