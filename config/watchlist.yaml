@@ -9,33 +9,29 @@ defaults:
   min_comp_samples: 8     # electronics are high-volume on eBay → demand more comps for confidence
   max_asking_ratio: 0.70  # flag when asking <= 70% of median sold (electronics flip fast even at 70%)
   min_profit_usd: 100     # ...AND >= $100 net profit (skip trivial-margin electronics flips)
-  scam_floor_ratio: 0.25  # asking < 25% of comps => likely scam/locked/mismatch -> Review, not Deal
   resale_fee_rate: 0.13   # assumed resale platform + payment fees (~13% for eBay)
   resale_ship_usd: 12     # assumed shipping/handling (electronics; many are local pickup)
 
 # Watchlist is PRIMARILY ELECTRONICS — high-resale, liquid, brand+model-identifiable goods
 # with deep eBay sold-comp history. Tune queries specific enough that comps match the model.
 items:
-  - query: "RTX 4090"
+  - query: "GPU"
     notes: "GPUs hold value. Read description for bent pins / ex-mining cards."
-  - query: "RTX 4080 Super"
-  - query: "Sony A7 IV"
+  - query: "Sony A7"
     resale_ship_usd: 20
-  - query: "iPhone 15 Pro"
-    min_comp_samples: 10  # high-fraud category — demand more comps + manual review
-  - query: "MacBook Pro M3"
-  - query: "iPad Pro M4"
-  - query: "LG C3 OLED 65"
-    resale_ship_usd: 0    # local pickup; don't model shipping for big TVs
-  - query: "Sony WH-1000XM5"
-  - query: "Steam Deck OLED"
-  - query: "Nintendo Switch OLED"
-  - query: "PlayStation 5 Pro"
-  - query: "Bose QuietComfort Ultra"
+  - query: "iPhone"
+  - query: "MacBook"
+  - query: "iPad"
+  - query: "OLED TV"
+  - query: "Sony headphones"
+  - query: "Steam Deck"
+  - query: "Nintendo Switch"
+  - query: "PS5"
+  - query: "Bose headphones"
   # --- monitors (high-resale displays) ---
-  - query: "LG UltraGear OLED 27"
-  - query: "Samsung Odyssey G9"
-  - query: "Dell UltraSharp 4K monitor"
+  - query: "OLED monitor"
+  - query: "ultrawide monitor"
+  - query: "gaming monitor"
 
 # Broad DISCOVERY sweep — "look for any items", not just the curated list above.
 # Each becomes a paced Facebook search (priced + a free sweep). The LLM normalizer values

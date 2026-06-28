@@ -59,7 +59,6 @@ profit = R - P
 ratio  = P / M
 ```
 - **Confidence gate:** `n < min_comp_samples` → label `low-confidence`, exclude from Deals.
-- **Scam/mismatch gate:** `ratio < scam_floor_ratio` → `⚠️ Review (too good to be true)`; never a clean Deal.
 - **Deal:** `ratio ≤ max_asking_ratio` AND `profit ≥ min_profit_usd` AND `n ≥ min_comp_samples` → `✅ Deal`.
 - Otherwise → not flagged.
 - Rank Deals by `profit` descending.

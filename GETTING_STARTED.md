@@ -118,7 +118,6 @@ runs the same pipeline in the background and refreshes when done.
   | `max_asking_ratio` | flag when asking ≤ this fraction of median sold (0.70) |
   | `min_profit_usd` | require ≥ this net profit ($100) |
   | `min_comp_samples` | require ≥ this many eBay sold comps (8) |
-  | `scam_floor_ratio` | below this ratio → Review, not Deal (0.25) |
   | `resale_fee_rate` / `resale_ship_usd` | fees + shipping subtracted from resale (0.13 / $12) |
 
 ---

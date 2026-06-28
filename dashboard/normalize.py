@@ -143,6 +143,75 @@ def _normalize_record(raw: dict[str, Any], title: str) -> dict[str, Any]:
     return rec
 
 
+_OPTIMIZE_TOOL = {
+    "name": "optimized_queries",
+    "description": "Return the best Facebook Marketplace search query for each input term.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer", "description": "0-based input index"},
+                        "query": {
+                            "type": "string",
+                            "description": "Concise, high-recall Facebook Marketplace search term for this category — the words buyers/sellers actually type. Keep it short (usually 1-3 words), drop filler.",
+                        },
+                    },
+                    "required": ["index", "query"],
+                },
+            }
+        },
+        "required": ["items"],
+    },
+}
+
+
+def optimize_queries(queries: list[str], model: Optional[str] = None) -> list[str]:
+    """Use Claude to turn simple watchlist terms into effective FB Marketplace searches.
+
+    Returns a list aligned to `queries` (falls back to the input unchanged if the LLM is
+    unavailable). One batched API call.
+    """
+    if not queries:
+        return []
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return list(queries)
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+        numbered = "\n".join(f"{i}: {q}" for i, q in enumerate(queries))
+        msg = client.messages.create(
+            model=model or DEFAULT_MODEL,
+            max_tokens=1024,
+            system=(
+                "You optimize search queries for a reseller scanning Facebook Marketplace for "
+                "underpriced electronics to flip. For each input category, return the single most "
+                "effective Marketplace search term — concise, high-recall, the words people actually "
+                "use in listings. Prefer broad-but-specific (e.g. 'graphics card' over 'GPU', "
+                "'OLED TV' stays). No brands unless the input implies one. Preserve order/index."
+            ),
+            tools=[_OPTIMIZE_TOOL],
+            tool_choice={"type": "tool", "name": "optimized_queries"},
+            messages=[{"role": "user", "content": f"Optimize these {len(queries)} searches:\n{numbered}"}],
+        )
+        by_index: dict[int, str] = {}
+        for block in msg.content:
+            if block.type == "tool_use":
+                for it in block.input.get("items", []):
+                    idx = it.get("index")
+                    if isinstance(idx, int) and 0 <= idx < len(queries) and it.get("query"):
+                        by_index[idx] = it["query"].strip()
+        return [by_index.get(i, q) for i, q in enumerate(queries)]
+    except Exception as e:
+        print(f"[optimize] LLM unavailable ({type(e).__name__}: {e}); using queries as-is.")
+        return list(queries)
+
+
 def normalize_titles(
     titles: list[str],
     category_hint: str = "",

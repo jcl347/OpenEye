@@ -7,11 +7,10 @@ Deal scoring — a faithful port of the rules in CLAUDE.md.
 
 Gates (effective thresholds = watchlist defaults + per-item overrides):
   - n < min_comp_samples            -> 'low-confidence' (excluded from Deals)
-  - ratio < scam_floor_ratio        -> 'review' (too good to be true)
   - ratio <= max_asking_ratio AND profit >= min_profit_usd AND n ok -> 'deal'
   - otherwise                       -> 'skip'
 
-Parts / want-ads (flagged by the LLM normalizer) are never Deals.
+Parts / want-ads / dealer-ads / sold / defective (flagged by the LLM) are never Deals.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ DEFAULTS = {
     "min_comp_samples": 8,
     "max_asking_ratio": 0.70,
     "min_profit_usd": 100,
-    "scam_floor_ratio": 0.25,
     "resale_fee_rate": 0.13,
     "resale_ship_usd": 12,
 }
@@ -111,12 +109,9 @@ def score_listing(
     if n < eff["min_comp_samples"]:
         out["verdict"] = "low-confidence"
     elif is_free:
-        # Free items: the scam-ratio gate is meaningless at P=$0 (ratio is always 0).
         # A genuinely free item with solid comps is the best possible deal; the LLM
-        # already routed scammy "free" want-ads to is_wanted_ad/skip. Require profit.
+        # already routes scammy "free" want-ads/ads/sold to skip. Require profit.
         out["verdict"] = "deal" if profit >= eff["min_profit_usd"] else "low-confidence"
-    elif ratio < eff["scam_floor_ratio"]:
-        out["verdict"] = "review"  # too good to be true
     elif ratio <= eff["max_asking_ratio"] and profit >= eff["min_profit_usd"]:
         out["verdict"] = "deal"
     else:
