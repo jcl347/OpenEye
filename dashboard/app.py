@@ -25,7 +25,7 @@ STATIC = HERE / "static"
 
 app = FastAPI(title="OpenEye Dashboard", version="0.1.0")
 
-_scan_state = {"running": False, "last_rc": None}
+_scan_proc: "subprocess.Popen | None" = None  # the running pipeline.py process, if any
 
 
 @app.on_event("startup")
@@ -55,28 +55,24 @@ def api_history(key: str) -> JSONResponse:
 
 @app.get("/api/scan/status")
 def api_scan_status() -> JSONResponse:
-    return JSONResponse(_scan_state)
+    # Reflect the ACTUAL process state via poll() — self-correcting, never gets stuck.
+    running = _scan_proc is not None and _scan_proc.poll() is None
+    last_rc = None if (_scan_proc is None or running) else _scan_proc.returncode
+    return JSONResponse({"running": running, "last_rc": last_rc})
 
 
 @app.post("/api/scan")
 def api_scan() -> JSONResponse:
     """Trigger a fresh scan (pipeline.py) in the background."""
-    if _scan_state["running"]:
+    global _scan_proc
+    if _scan_proc is not None and _scan_proc.poll() is None:
         return JSONResponse({"started": False, "reason": "already running"}, status_code=409)
-
-    def _done(rc: int) -> None:
-        _scan_state["running"] = False
-        _scan_state["last_rc"] = rc
-
-    _scan_state["running"] = True
     try:
-        # Detached; the dashboard polls /api/scan/status and refreshes when it clears.
-        proc = subprocess.Popen([sys.executable, str(HERE / "pipeline.py")], cwd=HERE)
-        _scan_state["pid"] = proc.pid
+        # Detached; the dashboard polls /api/scan/status and refreshes when it exits.
+        _scan_proc = subprocess.Popen([sys.executable, str(HERE / "pipeline.py")], cwd=HERE)
     except Exception as e:
-        _scan_state["running"] = False
         return JSONResponse({"started": False, "reason": str(e)}, status_code=500)
-    return JSONResponse({"started": True})
+    return JSONResponse({"started": True, "pid": _scan_proc.pid})
 
 
 CLEAR_PHRASE = "DELETE ALL HISTORY"
