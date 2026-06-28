@@ -98,20 +98,55 @@ async function loadProducts() {
 }
 
 async function loadHistory(key) {
-  const rows = await getJSON("/api/history?key=" + encodeURIComponent(key));
-  const asking = rows.filter((r) => r.source === "fb_asking").map((r) => [r.ts.replace("T", " "), r.price_usd]);
+  const rows = await getJSON(withScan("/api/history?key=" + encodeURIComponent(key)));
+  // Each FB-asking dot carries its product + listing URL so it can be hovered & clicked.
+  const asking = rows.filter((r) => r.source === "fb_asking").map((r) => ({
+    value: [r.ts.replace("T", " "), r.price_usd],
+    name: r.canonical_name || "",
+    url: r.url || "",
+    listingId: r.listing_id || "",
+  }));
   const median = rows.filter((r) => r.source === "ebay_median").map((r) => [r.ts.replace("T", " "), r.price_usd]);
+  const hasMedian = median.length > 0;
   historyChart = historyChart || echarts.init($("history-chart"));
-  historyChart.setOption({
-    tooltip: { trigger: "axis" },
-    legend: { data: ["FB asking", "eBay median sold"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
-    grid: { left: 55, right: 20, top: 20, bottom: 50 },
-    xAxis: { type: "category", ...darkAxis() },
-    yAxis: { type: "value", ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
-    series: [
-      { name: "FB asking", type: "scatter", symbolSize: 11, data: asking, itemStyle: { color: "#818cf8" } },
-      { name: "eBay median sold", type: "line", data: median, smooth: true, lineStyle: { color: "#34d399", width: 3 }, itemStyle: { color: "#34d399" } },
-    ],
+  historyChart.setOption(
+    {
+      tooltip: {
+        trigger: "item",
+        backgroundColor: "rgba(15,23,42,.95)",
+        borderColor: "#334155",
+        textStyle: { color: "#e2e8f0" },
+        formatter: (p) => {
+          if (p.seriesName === "FB asking") {
+            const d = p.data || {};
+            return `<b>${d.name || "Listing"}</b><br/>FB asking: <b>$${Number(p.value[1]).toLocaleString()}</b>`
+              + `<br/><span style="color:#94a3b8">${p.value[0]}</span>`
+              + (d.url ? `<br/><span style="color:#818cf8">🔗 click to open listing</span>` : "");
+          }
+          return `eBay median sold: <b>$${Number(p.value[1]).toLocaleString()}</b><br/><span style="color:#94a3b8">${p.value[0]}</span>`;
+        },
+      },
+      legend: { data: ["FB asking", "eBay median sold"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
+      grid: { left: 55, right: 20, top: 20, bottom: 50 },
+      xAxis: { type: "category", ...darkAxis() },
+      yAxis: { type: "value", ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
+      graphic: hasMedian ? [] : [{
+        type: "text", left: "center", top: 8,
+        style: { text: "No eBay sold comp for this product", fill: "#64748b", fontSize: 11 },
+      }],
+      series: [
+        { name: "FB asking", type: "scatter", symbolSize: 13, data: asking,
+          itemStyle: { color: "#818cf8" }, emphasis: { scale: 1.4 }, cursor: "pointer" },
+        { name: "eBay median sold", type: "line", data: median, smooth: true, symbolSize: 8,
+          lineStyle: { color: "#34d399", width: 3 }, itemStyle: { color: "#34d399" } },
+      ],
+    },
+    { replaceMerge: ["graphic", "series"] }
+  );
+  // Click a dot -> open that listing.
+  historyChart.off("click");
+  historyChart.on("click", (p) => {
+    if (p.data && p.data.url) window.open(p.data.url, "_blank");
   });
 }
 

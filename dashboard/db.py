@@ -329,9 +329,10 @@ def get_products(scan_id: Optional[int] = None) -> list[dict[str, Any]]:
                       MAX(ebay_median) ebay_median
                FROM listings
                WHERE scan_id=? AND canonical_key IS NOT NULL
-                     AND is_part=0 AND is_wanted_ad=0
+                     AND canonical_key NOT LIKE '%unknown%'
+                     AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
                GROUP BY canonical_key
-               ORDER BY n_listings DESC""",
+               ORDER BY (MAX(ebay_median) IS NULL), n_listings DESC""",
             (sid,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -359,7 +360,7 @@ def clear_all() -> dict[str, int]:
 def get_history(canonical_key: str) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
-            """SELECT ts, source, price_usd, listing_id, url
+            """SELECT ts, source, price_usd, listing_id, url, canonical_name
                FROM price_history WHERE canonical_key=? ORDER BY ts""",
             (canonical_key,),
         ).fetchall()
