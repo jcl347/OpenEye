@@ -1,0 +1,38 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Live MCP config may reference local paths/tokens via env — keep the template only
+.mcp.json
+!mcp.example.json
+
+# Runtime output (may contain scraped listing data / seller PII)
+reports/
+state/
+data/
+*.log
+
+# Facebook MCP persistent browser profile (cookies / login session)
+.fb-profile/
+user-data-dir/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

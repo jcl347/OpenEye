@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenEye — All-Seeing Deal Intelligence</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --eye:#34d399; --gold:#fbbf24; }
+    body { font-family:'Inter',ui-sans-serif,system-ui,sans-serif; background:#0b1120; color:#e2e8f0; }
+    h1,h2,.display { font-family:'Space Grotesk','Inter',sans-serif; }
+    .glass { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08);
+             backdrop-filter:blur(8px); }
+    .kpi { transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+    .kpi:hover { transform:translateY(-3px); box-shadow:0 18px 40px -18px rgba(0,0,0,.6); border-color:rgba(52,211,153,.4); }
+    .scrollbar-thin::-webkit-scrollbar { height:8px; width:8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background:#334155; border-radius:4px; }
+    tbody tr { transition:background .12s ease; }
+    /* All-seeing eye */
+    .eye-wrap { filter:drop-shadow(0 0 10px rgba(52,211,153,.55)); }
+    .eye-iris { transform-origin:center; animation:scan 6s ease-in-out infinite; }
+    .eye-glow { animation:pulse 3.2s ease-in-out infinite; transform-origin:center; }
+    .eye-ray  { animation:rays 4s linear infinite; transform-origin:center; }
+    @keyframes pulse { 0%,100%{opacity:.35} 50%{opacity:.9} }
+    @keyframes scan  { 0%,100%{transform:translateX(-3px)} 50%{transform:translateX(3px)} }
+    @keyframes rays  { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+    .bg-grid { background-image:radial-gradient(rgba(255,255,255,.05) 1px, transparent 1px);
+               background-size:22px 22px; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <!-- Hero / header -->
+  <header class="relative overflow-hidden border-b border-white/10 bg-gradient-to-b from-[#0d1730] to-[#0b1120] bg-grid">
+    <div class="absolute -top-24 left-1/2 -translate-x-1/2 h-72 w-72 rounded-full bg-emerald-500/20 blur-3xl"></div>
+    <div class="max-w-7xl mx-auto px-6 py-6 relative">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-4">
+          <!-- The All-Seeing Eye -->
+          <svg class="eye-wrap" width="58" height="58" viewBox="0 0 100 100" aria-label="OpenEye">
+            <g class="eye-ray" stroke="var(--eye)" stroke-width="1.4" opacity="0.5">
+              <line x1="50" y1="4"  x2="50" y2="14"/>
+              <line x1="50" y1="86" x2="50" y2="96"/>
+              <line x1="4"  y1="50" x2="14" y2="50"/>
+              <line x1="86" y1="50" x2="96" y2="50"/>
+              <line x1="20" y1="20" x2="27" y2="27"/>
+              <line x1="73" y1="73" x2="80" y2="80"/>
+              <line x1="80" y1="20" x2="73" y2="27"/>
+              <line x1="27" y1="73" x2="20" y2="80"/>
+            </g>
+            <circle class="eye-glow" cx="50" cy="50" r="34" fill="none" stroke="var(--eye)" stroke-width="1" opacity="0.5"/>
+            <!-- almond eye outline -->
+            <path d="M14 50 Q50 20 86 50 Q50 80 14 50 Z" fill="rgba(52,211,153,0.08)" stroke="var(--eye)" stroke-width="2.5"/>
+            <circle class="eye-iris" cx="50" cy="50" r="15" fill="none" stroke="var(--gold)" stroke-width="2.5"/>
+            <circle class="eye-iris" cx="50" cy="50" r="6.5" fill="var(--gold)"/>
+          </svg>
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight text-white">OpenEye</h1>
+            <p class="text-xs text-emerald-300/80 tracking-wide uppercase">All-Seeing Deal Intelligence</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-5">
+          <div class="text-right text-xs text-slate-400 leading-5">
+            <div id="last-scan">—</div>
+          </div>
+          <button id="scan-btn"
+            class="group relative bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-semibold text-sm px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 disabled:opacity-50">
+            <span id="scan-btn-label">Run scan</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-7 space-y-7">
+    <div id="empty" class="hidden glass rounded-2xl p-12 text-center">
+      <p class="text-slate-400">The eye sees nothing yet. Click <span class="font-semibold text-emerald-300">Run scan</span> to begin.</p>
+    </div>
+
+    <!-- KPI cards -->
+    <section id="kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4"></section>
+
+    <!-- Charts -->
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="glass rounded-2xl p-5 lg:col-span-2">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-slate-200">Price history — asking vs. eBay sold</h2>
+          <select id="product-select" class="text-sm border border-white/10 rounded-lg px-2 py-1 bg-slate-800 text-slate-200"></select>
+        </div>
+        <div id="history-chart" class="h-72"></div>
+      </div>
+      <div class="glass rounded-2xl p-5">
+        <h2 class="font-semibold text-slate-200 mb-3">Opportunity mix</h2>
+        <div id="verdict-chart" class="h-72"></div>
+      </div>
+    </section>
+
+    <!-- Opportunities table -->
+    <section class="glass rounded-2xl overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-white/10">
+        <h2 class="font-semibold text-slate-200">Ranked opportunities</h2>
+        <div class="flex gap-1 text-xs" id="filter-tabs">
+          <button data-f="deal"   class="px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 font-medium ring-2 ring-emerald-400/40">✅ Deals</button>
+          <button data-f="review" class="px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 font-medium">⚠️ Review</button>
+          <button data-f="free"   class="px-3 py-1 rounded-full bg-sky-500/15 text-sky-300 font-medium">🎁 Free</button>
+          <button data-f="all"    class="px-3 py-1 rounded-full bg-white/5 text-slate-300 font-medium">All</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto scrollbar-thin">
+        <table class="w-full text-sm">
+          <thead class="text-left text-slate-400 border-b border-white/10 text-xs uppercase tracking-wide">
+            <tr>
+              <th class="px-5 py-3 font-medium">Est. profit</th>
+              <th class="px-3 py-3 font-medium">Asking</th>
+              <th class="px-3 py-3 font-medium">Median sold (n)</th>
+              <th class="px-3 py-3 font-medium">Ratio</th>
+              <th class="px-3 py-3 font-medium">Condition / defects</th>
+              <th class="px-3 py-3 font-medium">Product / Title</th>
+              <th class="px-3 py-3 font-medium">Location</th>
+              <th class="px-3 py-3 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody id="deals-body" class="text-slate-200"></tbody>
+        </table>
+      </div>
+      <div id="table-empty" class="hidden px-5 py-10 text-center text-slate-500 text-sm">No listings in this view.</div>
+    </section>
+
+    <p class="text-xs text-slate-500 text-center pt-1">
+      Resale = median eBay <em>sold</em> comp, net of fees &amp; shipping. Items normalized &amp; condition-read via LLM.
+      A screen, not a guarantee — always eyeball the listing.
+    </p>
+    <div class="flex justify-center pb-8">
+      <button id="clear-btn"
+        class="text-xs text-slate-500 hover:text-rose-300 border border-white/10 hover:border-rose-400/40 rounded-lg px-3 py-1.5">
+        Clear all scan history
+      </button>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "//": "TEMPLATE — review, then copy to .mcp.json to activate. Both servers are local; this file contains no secrets.",
+  "//comp-source": "'ebay-sold-comps' is a local Playwright MCP in mcp/ebay-sold-comps (no API token, no per-call cost). Run `uv sync` in that folder once. Override its location with EBAY_MCP_DIR if you move it.",
+  "mcpServers": {
+    "facebook-marketplace": {
+      "type": "http",
+      "url": "${FB_MCP_URL:-http://127.0.0.1:8000/mcp}"
+    },
+    "ebay-sold-comps": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${EBAY_MCP_DIR:-mcp/ebay-sold-comps}",
+        "python",
+        "server.py"
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+[project]
+name = "ebay-sold-comps"
+version = "0.1.0"
+description = "Local MCP server: eBay SOLD-listing resale comps (Playwright). Replaces the Apify-hosted comp source."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "fastmcp>=2.14.3",
+    "playwright>=1.57.0",
+]

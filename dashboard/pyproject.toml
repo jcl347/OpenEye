@@ -1,0 +1,13 @@
+[project]
+name = "openeye-dashboard"
+version = "0.1.0"
+description = "OpenEye local server + executive dashboard: persists scraped Marketplace listings and eBay sold comps, scores deals, and visualizes price history. Normalizes items via LLM extraction (no regex)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pyyaml>=6.0",
+    "truststore>=0.9.0",
+]

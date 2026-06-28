@@ -1,0 +1,75 @@
+# What to hunt for, and when to flag a deal.
+# Each entry becomes one Facebook Marketplace search near FB_LOCATION_ID (set in .env).
+# Per-item keys override `defaults`. Location/radius are global (see README).
+
+# Deal thresholds — fine-tuned for ELECTRONICS resale (liquid, high-volume comps, but
+# scam-prone). Effective values = these defaults + any per-item override below.
+defaults:
+  days: 7                 # listing recency filter. MCP supports ONLY 1, 7, or 30.
+  min_comp_samples: 8     # electronics are high-volume on eBay → demand more comps for confidence
+  max_asking_ratio: 0.70  # flag when asking <= 70% of median sold (electronics flip fast even at 70%)
+  min_profit_usd: 100     # ...AND >= $100 net profit (skip trivial-margin electronics flips)
+  scam_floor_ratio: 0.25  # asking < 25% of comps => likely scam/locked/mismatch -> Review, not Deal
+  resale_fee_rate: 0.13   # assumed resale platform + payment fees (~13% for eBay)
+  resale_ship_usd: 12     # assumed shipping/handling (electronics; many are local pickup)
+
+# Watchlist is PRIMARILY ELECTRONICS — high-resale, liquid, brand+model-identifiable goods
+# with deep eBay sold-comp history. Tune queries specific enough that comps match the model.
+items:
+  - query: "RTX 4090"
+    notes: "GPUs hold value. Read description for bent pins / ex-mining cards."
+  - query: "RTX 4080 Super"
+  - query: "Sony A7 IV"
+    resale_ship_usd: 20
+  - query: "iPhone 15 Pro"
+    min_comp_samples: 10  # high-fraud category — demand more comps + manual review
+  - query: "MacBook Pro M3"
+  - query: "iPad Pro M4"
+  - query: "LG C3 OLED 65"
+    resale_ship_usd: 0    # local pickup; don't model shipping for big TVs
+  - query: "Sony WH-1000XM5"
+  - query: "Steam Deck OLED"
+  - query: "Nintendo Switch OLED"
+  - query: "PlayStation 5 Pro"
+  - query: "Bose QuietComfort Ultra"
+  # --- monitors (high-resale displays) ---
+  - query: "LG UltraGear OLED 27"
+  - query: "Samsung Odyssey G9"
+  - query: "Dell UltraSharp 4K monitor"
+
+# Broad DISCOVERY sweep — "look for any items", not just the curated list above.
+# Each becomes a paced Facebook search (priced + a free sweep). The LLM normalizer values
+# every result per-model, so a broad term like "laptop" still gets matched to the right comp.
+# Uses `defaults` thresholds. Disable by setting enabled: false. Keep the list modest —
+# more queries = more coverage but more scraping; the pipeline paces requests either way.
+discovery:
+  enabled: true
+  queries:
+    # --- electronics-led discovery ---
+    - laptop
+    - gaming pc
+    - graphics card
+    - macbook
+    - ipad
+    - apple watch
+    - mirrorless camera
+    - camera lens
+    - drone
+    - 4k tv
+    - oled tv
+    - gaming monitor
+    - 4k monitor
+    - ultrawide monitor
+    - computer monitor
+    - mechanical keyboard
+    - soundbar
+    - bluetooth speaker
+    - vr headset
+    - smartphone
+    - tablet
+    - portable power station
+    - gpu
+    # --- a few high-resale non-electronics, for breadth ---
+    - power tools
+    - electric bike
+    - espresso machine
