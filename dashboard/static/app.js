@@ -7,6 +7,10 @@ const fmtUsd = (v, d = 0) =>
 let currentFilter = "deal";
 let historyChart, verdictChart;
 let allListings = [];
+let currentScanId = null;   // null = latest scan; set to view a historical scan
+
+const scanParam = () => (currentScanId ? "?scan_id=" + currentScanId : "");
+const withScan = (url) => url + (currentScanId ? (url.includes("?") ? "&" : "?") + "scan_id=" + currentScanId : "");
 
 // Human labels for verdicts — "skip" reads as an error to an exec; it means "fairly priced".
 const VERDICT = {
@@ -38,12 +42,23 @@ function kpiCard(label, value, accent, sub) {
     </div>`;
 }
 
+async function loadScans() {
+  const scans = await getJSON("/api/scans");
+  const sel = $("scan-select");
+  sel.innerHTML = scans
+    .map((s) => `<option value="${s.id}">${s.is_latest ? "● Latest" : "◷"} ${(s.ts || "").replace("T", " ")} — ${s.deals_count}✅/${s.review_count}⚠️</option>`)
+    .join("");
+  if (currentScanId) sel.value = String(currentScanId);
+}
+
 async function loadSummary() {
-  const s = await getJSON("/api/summary");
+  const s = await getJSON(withScan("/api/summary"));
   if (!s.has_data) { $("empty").classList.remove("hidden"); $("kpis").innerHTML = ""; return false; }
   $("empty").classList.add("hidden");
-  $("last-scan").textContent = "Last scan: " + (s.last_scan_ts || "—").replace("T", " ");
-  const freeFinds = allListings.filter((r) => r.price_usd === 0).length;
+  $("hist-indicator").classList.toggle("hidden", !!s.is_latest);
+  $("last-scan").textContent = (s.is_latest ? "Last scan: " : "Scan: ") + (s.last_scan_ts || "—").replace("T", " ");
+  // Genuine free = $0 AND not flagged as false-free (trade / sale / mislist / dealer ad).
+  const freeFinds = allListings.filter((r) => r.price_usd === 0 && !r.false_free).length;
   $("kpis").innerHTML = [
     kpiCard("Deals found", s.deals_count, "emerald", "buy-worthy margin"),
     kpiCard("Potential profit", fmtUsd(s.total_potential_profit), "emerald", "sum of est. profit"),
@@ -74,7 +89,7 @@ function loadVerdictChart() {
 }
 
 async function loadProducts() {
-  const products = await getJSON("/api/products");
+  const products = await getJSON(withScan("/api/products"));
   const sel = $("product-select");
   sel.innerHTML = products.map((p) => `<option value="${encodeURIComponent(p.canonical_key)}">${p.canonical_name || p.canonical_key} (${p.n_listings})</option>`).join("");
   historyChart = historyChart || echarts.init($("history-chart"));
@@ -146,12 +161,13 @@ function applyFilter() {
   let rows = allListings;
   if (currentFilter === "deal") rows = allListings.filter((r) => r.verdict === "deal");
   else if (currentFilter === "review") rows = allListings.filter((r) => r.verdict === "review");
-  else if (currentFilter === "free") rows = allListings.filter((r) => r.price_usd === 0);
+  else if (currentFilter === "free") rows = allListings.filter((r) => r.price_usd === 0 && !r.false_free);
   render(rows);
 }
 
 // ---------- Scan trigger ----------
 async function triggerScan() {
+  currentScanId = null;   // a new scan -> snap back to the live/latest view
   const btn = $("scan-btn");
   btn.disabled = true; $("scan-btn-label").textContent = "Scanning…";
   try { await fetch("/api/scan", { method: "POST" }); } catch (e) {}
@@ -166,7 +182,8 @@ async function pollScan() {
 }
 
 async function refresh() {
-  allListings = await getJSON("/api/listings");
+  await loadScans();
+  allListings = await getJSON(withScan("/api/listings"));
   const has = await loadSummary();
   if (!has) return;
   applyFilter();
@@ -211,6 +228,12 @@ async function clearHistory() {
 // ---------- wire up ----------
 $("scan-btn").addEventListener("click", triggerScan);
 $("clear-btn").addEventListener("click", clearHistory);
+$("scan-select").addEventListener("change", (e) => {
+  // Latest option is the first; selecting it returns to live view.
+  const opts = e.target.options;
+  currentScanId = e.target.selectedIndex === 0 ? null : Number(e.target.value);
+  refresh();
+});
 $("product-select").addEventListener("change", (e) => loadHistory(decodeURIComponent(e.target.value)));
 $("filter-tabs").addEventListener("click", (e) => {
   const f = e.target.getAttribute("data-f");

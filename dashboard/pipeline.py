@@ -320,6 +320,16 @@ def main() -> None:
                 "listing_intent": a["listing_intent"],
             })
 
+            # Dealer/storefront ADVERTISEMENT (any price): a solicitation post, not a real
+            # single item to buy -> always skip. (e.g. "I build & sell PCs, message me".)
+            if a["listing_intent"] == "advertisement":
+                r["verdict"] = "skip"
+                if r["price_usd"] == 0:
+                    r["false_free"] = 1
+                    false_free += 1
+                print(f"  [dealer-ad] {(r['canonical_name'] or '')[:32]} -> skip", flush=True)
+                continue
+
             # Negate FALSE FREE: a $0 item the description reveals as a trade / sale / ISO /
             # mis-list is NOT a free deal. Trades & ISO can't be bought -> skip; a real-but-
             # mislisted price is unknown -> review (manual check).

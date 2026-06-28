@@ -61,10 +61,13 @@
             <p class="text-xs text-emerald-300/80 tracking-wide uppercase">All-Seeing Deal Intelligence</p>
           </div>
         </div>
-        <div class="flex items-center gap-5">
+        <div class="flex items-center gap-4">
           <div class="text-right text-xs text-slate-400 leading-5">
             <div id="last-scan">—</div>
+            <div id="hist-indicator" class="hidden text-amber-300">viewing past scan</div>
           </div>
+          <select id="scan-select" title="Historical lookup — view a past scan"
+            class="text-xs bg-slate-800 border border-white/10 rounded-lg px-2 py-1.5 text-slate-200 max-w-[200px]"></select>
           <button id="scan-btn"
             class="group relative bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-semibold text-sm px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 disabled:opacity-50">
             <span id="scan-btn-label">Run scan</span>

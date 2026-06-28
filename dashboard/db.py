@@ -203,9 +203,29 @@ def _latest_scan_id(conn: sqlite3.Connection) -> Optional[int]:
     return row["id"] if row else None
 
 
-def get_summary() -> dict[str, Any]:
+def _resolve_scan_id(conn: sqlite3.Connection, scan_id: Optional[int]) -> Optional[int]:
+    """Return the requested scan id if it exists, else the latest."""
+    if scan_id is not None:
+        row = conn.execute("SELECT id FROM scans WHERE id=?", (scan_id,)).fetchone()
+        if row:
+            return row["id"]
+    return _latest_scan_id(conn)
+
+
+def get_scans() -> list[dict[str, Any]]:
+    """All scans, newest first — powers the historical lookup selector."""
     with connect() as conn:
-        sid = _latest_scan_id(conn)
+        latest = _latest_scan_id(conn)
+        rows = conn.execute(
+            """SELECT id, ts, scanned_count, deals_count, review_count
+               FROM scans ORDER BY id DESC"""
+        ).fetchall()
+        return [{**dict(r), "is_latest": r["id"] == latest} for r in rows]
+
+
+def get_summary(scan_id: Optional[int] = None) -> dict[str, Any]:
+    with connect() as conn:
+        sid = _resolve_scan_id(conn, scan_id)
         if sid is None:
             return {"has_data": False}
         scan = dict(conn.execute("SELECT * FROM scans WHERE id=?", (sid,)).fetchone())
@@ -216,6 +236,8 @@ def get_summary() -> dict[str, Any]:
         total_scans = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
         return {
             "has_data": True,
+            "scan_id": sid,
+            "is_latest": sid == _latest_scan_id(conn),
             "last_scan_ts": scan["ts"],
             "location_id": scan["location_id"],
             "watchlist_size": scan["watchlist_size"],
@@ -228,9 +250,9 @@ def get_summary() -> dict[str, Any]:
         }
 
 
-def get_listings(verdict: Optional[str] = None) -> list[dict[str, Any]]:
+def get_listings(verdict: Optional[str] = None, scan_id: Optional[int] = None) -> list[dict[str, Any]]:
     with connect() as conn:
-        sid = _latest_scan_id(conn)
+        sid = _resolve_scan_id(conn, scan_id)
         if sid is None:
             return []
         sql = "SELECT * FROM listings WHERE scan_id=?"
@@ -242,10 +264,10 @@ def get_listings(verdict: Optional[str] = None) -> list[dict[str, Any]]:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def get_products() -> list[dict[str, Any]]:
-    """Canonical products with their latest stats, for the price-history selector."""
+def get_products(scan_id: Optional[int] = None) -> list[dict[str, Any]]:
+    """Canonical products with their stats, for the price-history selector."""
     with connect() as conn:
-        sid = _latest_scan_id(conn)
+        sid = _resolve_scan_id(conn, scan_id)
         if sid is None:
             return []
         rows = conn.execute(

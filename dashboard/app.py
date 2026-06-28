@@ -33,19 +33,25 @@ def _startup() -> None:
     db.init_db()
 
 
+@app.get("/api/scans")
+def api_scans() -> JSONResponse:
+    """List all scans (newest first) for the historical lookup selector."""
+    return JSONResponse(db.get_scans())
+
+
 @app.get("/api/summary")
-def api_summary() -> JSONResponse:
-    return JSONResponse(db.get_summary())
+def api_summary(scan_id: int | None = None) -> JSONResponse:
+    return JSONResponse(db.get_summary(scan_id))
 
 
 @app.get("/api/listings")
-def api_listings(verdict: str | None = None) -> JSONResponse:
-    return JSONResponse(db.get_listings(verdict))
+def api_listings(verdict: str | None = None, scan_id: int | None = None) -> JSONResponse:
+    return JSONResponse(db.get_listings(verdict, scan_id))
 
 
 @app.get("/api/products")
-def api_products() -> JSONResponse:
-    return JSONResponse(db.get_products())
+def api_products(scan_id: int | None = None) -> JSONResponse:
+    return JSONResponse(db.get_products(scan_id))
 
 
 @app.get("/api/history")
