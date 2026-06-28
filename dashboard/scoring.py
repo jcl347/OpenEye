@@ -85,11 +85,12 @@ def score_listing(
     *,
     is_part: bool = False,
     is_wanted_ad: bool = False,
+    is_advertisement: bool = False,
 ) -> dict[str, Any]:
     """Return {verdict, est_profit, ratio, net_resale} for one listing."""
     out: dict[str, Any] = {"est_profit": None, "ratio": None, "net_resale": None}
 
-    if is_part or is_wanted_ad:
+    if is_part or is_wanted_ad or is_advertisement:
         out["verdict"] = "skip"
         return out
     if price_usd is None or price_usd < 0:   # unparseable / non-USD — exclude (free $0 is kept)

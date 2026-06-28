@@ -117,20 +117,28 @@ async function loadHistory(key) {
 
 // ---------- Table ----------
 function defectCell(r) {
-  if (!r.detail_checked) return `<span class="text-slate-600 text-xs">—</span>`;
-  const [label, cls] = SEVERITY[r.defect_severity] || SEVERITY.none;
-  // Flag a $0 listing the description revealed as NOT actually free (trade/sale/ISO/mis-list).
-  let intent = "";
-  if (r.false_free) intent = `<span class="px-1.5 py-0.5 rounded bg-rose-600/30 text-rose-200 text-[10px] font-semibold" title="Listing intent: ${r.listing_intent}">⚑ not really free (${r.listing_intent})</span> `;
-  else if (r.genuinely_free) intent = `<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px]" title="Confirmed genuine giveaway">✓ genuine free</span> `;
-  let extra = "";
-  try {
-    const d = r.defects_json ? JSON.parse(r.defects_json) : null;
-    const flags = (d && d.risk_flags) || [];
-    if (flags.length) extra = `<div class="mt-0.5 flex flex-wrap gap-1">${flags.slice(0, 3).map((f) => `<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 text-[10px]">${f}</span>`).join("")}</div>`;
-  } catch (e) {}
-  const summary = (r.defect_summary || "").replace(/"/g, "&quot;");
-  return `${intent}<span class="px-2 py-0.5 rounded-full text-xs ${cls}" title="${summary}">${label}</span>${extra}`;
+  const tag = (cls, text, title = "") => `<span class="px-1.5 py-0.5 rounded ${cls} text-[10px] font-semibold" title="${title}">${text}</span>`;
+  const badges = [];
+  if (r.sold) badges.push(tag("bg-rose-600/40 text-rose-100", "SOLD", r.availability || "sold"));
+  if (r.is_advertisement) badges.push(tag("bg-rose-600/30 text-rose-200", "dealer ad", "storefront / solicitation post"));
+  if (r.price_dropped_to_zero) badges.push(tag("bg-amber-500/25 text-amber-200", "was priced → $0", "this listing had a price in a prior scan, now $0"));
+  if (r.false_free) badges.push(tag("bg-rose-600/30 text-rose-200", `not really free (${r.listing_intent || "?"})`, "the $0 price isn't genuine"));
+  else if (r.genuinely_free) badges.push(tag("bg-emerald-500/15 text-emerald-300", "✓ genuine free", "confirmed giveaway"));
+  if (r.price_in_description) badges.push(tag("bg-slate-500/20 text-slate-200", `listed $${Math.round(r.price_in_description)} in text`, "real price found in the description"));
+
+  let sev = "";
+  if (r.detail_checked) {
+    const [label, cls] = SEVERITY[r.defect_severity] || SEVERITY.none;
+    const summary = (r.defect_summary || "").replace(/"/g, "&quot;");
+    sev = `<span class="px-2 py-0.5 rounded-full text-xs ${cls}" title="${summary}">${label}</span>`;
+    try {
+      const d = r.defects_json ? JSON.parse(r.defects_json) : null;
+      const flags = (d && d.risk_flags) || [];
+      if (flags.length) sev += `<div class="mt-0.5 flex flex-wrap gap-1">${flags.slice(0, 3).map((f) => `<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 text-[10px]">${f}</span>`).join("")}</div>`;
+    } catch (e) {}
+  }
+  if (!badges.length && !sev) return `<span class="text-slate-600 text-xs">—</span>`;
+  return `<div class="flex flex-wrap items-center gap-1">${badges.join("")}${sev}</div>`;
 }
 
 function render(rows) {

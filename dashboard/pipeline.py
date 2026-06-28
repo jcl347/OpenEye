@@ -47,9 +47,9 @@ EBAY_CONDITIONS = {"new", "used", "open box", "refurbished"}
 
 # --- Concurrency: parallelism speeds + effectively widens the scan. eBay tolerates it
 #     freely (different site); FB gets modest concurrency (detection trade-off, jittered). ---
-FB_CONCURRENCY = 3                 # parallel FB search queries (1 when a login profile is set)
-EBAY_CONCURRENCY = 4               # parallel eBay comp lookups
-DETAIL_CONCURRENCY = 3             # parallel FB detail fetches
+FB_CONCURRENCY = 5                 # parallel FB search queries (1 when a login profile is set)
+EBAY_CONCURRENCY = 6               # parallel eBay comp lookups
+DETAIL_CONCURRENCY = 5             # parallel FB detail fetches
 
 # Geographic widening (best-effort; FB honors radius most reliably with explicit lat/long).
 # Defaults anchor on Seattle; override via env (FB_RADIUS_KM / FB_LAT / FB_LNG).
@@ -235,8 +235,21 @@ def main() -> None:
             if row["canonical_key"]:
                 eff_by_key[row["canonical_key"]] = eff
 
-    # ---- 3. One eBay comp per canonical product (skip parts / want-ads) ----
-    real = [r for r in rows if not r["is_part"] and not r["is_wanted_ad"] and r["canonical_key"]]
+    # ---- 2b. Price-drop-to-$0 detection: was this listing priced > 0 in a prior scan? ----
+    db.init_db()
+    prior = db.get_prior_prices([r["listing_id"] for r in rows if r.get("listing_id")])
+    dropped = 0
+    for r in rows:
+        lid = r.get("listing_id")
+        if lid and prior.get(lid, 0) > 0 and r["price_usd"] == 0:
+            r["price_dropped_to_zero"] = 1
+            dropped += 1
+    if dropped:
+        print(f"[price] {dropped} listing(s) dropped from a prior price to $0 (likely sold/zeroed)", flush=True)
+
+    # ---- 3. One eBay comp per canonical product (skip parts / want-ads / dealer ads) ----
+    real = [r for r in rows if not r["is_part"] and not r["is_wanted_ad"]
+            and not r.get("is_advertisement") and r["canonical_key"]]
     by_key: dict[str, list[dict]] = collections.defaultdict(list)
     for r in real:
         by_key[r["canonical_key"]].append(r)
@@ -271,11 +284,15 @@ def main() -> None:
         s = scoring.score_listing(
             r["price_usd"], r["ebay_median"], r["ebay_count"], eff,
             is_part=r["is_part"], is_wanted_ad=r["is_wanted_ad"],
+            is_advertisement=r.get("is_advertisement", False),
         )
         r.update(s)
         for k, v in (("detail_checked", 0), ("defect_severity", None),
                      ("defect_summary", None), ("defects_json", None), ("for_parts", 0),
-                     ("listing_intent", None), ("genuinely_free", 0), ("false_free", 0)):
+                     ("listing_intent", None), ("genuinely_free", 0), ("false_free", 0),
+                     ("is_advertisement", int(bool(r.get("is_advertisement")))),
+                     ("availability", None), ("price_in_description", None),
+                     ("price_dropped_to_zero", 0), ("sold", 0)):
             r.setdefault(k, v)
 
     # ---- 4b. Defect / condition read via Claude (top candidates only) ----
@@ -314,14 +331,31 @@ def main() -> None:
             r["for_parts"] = int(bool(a["for_parts_or_broken"]))
             r["listing_intent"] = a["listing_intent"]
             r["genuinely_free"] = int(bool(a["genuinely_free"]))
+            r["availability"] = a["availability"]
+            r["price_in_description"] = a.get("price_in_description") or None
             r["defects_json"] = json.dumps({
                 "defects": a["defects"], "risk_flags": a["risk_flags"],
                 "refurb_needed": a["refurb_needed"], "for_parts": a["for_parts_or_broken"],
-                "listing_intent": a["listing_intent"],
+                "listing_intent": a["listing_intent"], "availability": a["availability"],
+                "price_in_description": a.get("price_in_description") or None,
             })
 
-            # Dealer/storefront ADVERTISEMENT (any price): a solicitation post, not a real
-            # single item to buy -> always skip. (e.g. "I build & sell PCs, message me".)
+            # SOLD / pending / unavailable (incl. misspellings) -> remove, it can't be bought.
+            if a["availability"] in ("sold", "pending", "unavailable"):
+                r["verdict"] = "skip"
+                r["sold"] = 1
+                if r["price_usd"] == 0:
+                    r["false_free"] = 1
+                print(f"  [{a['availability']}] {(r['canonical_name'] or '')[:30]} -> skip", flush=True)
+                continue
+
+            # DEFECTIVE / for-parts / broken -> remove (skip), not Review.
+            if a["for_parts_or_broken"]:
+                r["verdict"] = "skip"
+                print(f"  [defective] {(r['canonical_name'] or '')[:30]} -> removed", flush=True)
+                continue
+
+            # Dealer/storefront ADVERTISEMENT (any price) -> skip (not a single buyable item).
             if a["listing_intent"] == "advertisement":
                 r["verdict"] = "skip"
                 if r["price_usd"] == 0:
@@ -331,19 +365,19 @@ def main() -> None:
                 continue
 
             # Negate FALSE FREE: a $0 item the description reveals as a trade / sale / ISO /
-            # mis-list is NOT a free deal. Trades & ISO can't be bought -> skip; a real-but-
-            # mislisted price is unknown -> review (manual check).
+            # mis-list (real price in the text) is NOT a free deal.
             if r["price_usd"] == 0 and not a["genuinely_free"] and \
                     a["listing_intent"] in ("trade_only", "want_to_buy", "mislisted", "for_sale"):
                 r["verdict"] = "skip" if a["listing_intent"] in ("trade_only", "want_to_buy") else "review"
                 r["false_free"] = 1
                 false_free += 1
-                print(f"  [false-free:{a['listing_intent']}] {(r['canonical_name'] or '')[:30]} -> {r['verdict']}", flush=True)
+                pid = f" (real price ~${a['price_in_description']:.0f})" if a.get("price_in_description") else ""
+                print(f"  [false-free:{a['listing_intent']}]{pid} {(r['canonical_name'] or '')[:26]} -> {r['verdict']}", flush=True)
                 continue
 
             print(f"  [{a['severity']}] {(r['canonical_name'] or '')[:32]} — {a['condition_summary'][:54]}", flush=True)
-            # Protect the exec: a 'deal' that's actually broken/for-parts -> Review.
-            if r["verdict"] == "deal" and (a["for_parts_or_broken"] or a["severity"] == "high"):
+            # A high-severity (but not for-parts) 'deal' is uncertain -> Review.
+            if r["verdict"] == "deal" and a["severity"] == "high":
                 r["verdict"] = "review"
     if false_free:
         print(f"[defects] negated {false_free} false-'free' listings", flush=True)
@@ -372,6 +406,12 @@ def main() -> None:
 
     db.init_db()
     scan_id = db.ingest_report(report)
+    # Remember each listing's current price for next scan's drop-to-$0 detection.
+    db.record_listing_prices(
+        [(r["listing_id"], r["price_usd"]) for r in rows
+         if r.get("listing_id") and r["price_usd"] is not None],
+        ts,
+    )
 
     print(f"\nScan {scan_id}: {len(rows)} listings | {deals} deals | {review} review")
     print(f"Report: reports/{stamp}.md  |  DB: data/openeye.db")

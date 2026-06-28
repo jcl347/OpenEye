@@ -63,9 +63,21 @@ CREATE TABLE IF NOT EXISTS listings (
     defect_summary  TEXT,                       -- one-line condition summary
     defects_json    TEXT,                       -- JSON: {defects:[], risk_flags:[], for_parts, refurb_needed}
     for_parts       INTEGER DEFAULT 0,
-    listing_intent  TEXT,                       -- for_sale | free_giveaway | trade_only | want_to_buy | mislisted | other
+    listing_intent  TEXT,                       -- for_sale | free_giveaway | trade_only | want_to_buy | mislisted | advertisement | other
     genuinely_free  INTEGER DEFAULT 0,
-    false_free      INTEGER DEFAULT 0           -- $0 price but really a trade/sale/ISO/mis-list
+    false_free      INTEGER DEFAULT 0,          -- $0 price but really a trade/sale/ISO/mis-list/ad
+    is_advertisement INTEGER DEFAULT 0,         -- dealer/storefront/solicitation post
+    availability    TEXT,                        -- available | sold | pending | unavailable
+    price_in_description REAL,                   -- real asking price found in the description, if any
+    price_dropped_to_zero INTEGER DEFAULT 0,     -- was priced > 0 in a prior scan, now $0
+    sold            INTEGER DEFAULT 0
+);
+
+-- Per-listing price memory across scans (survives the per-scan listings churn).
+CREATE TABLE IF NOT EXISTS listing_prices (
+    listing_id  TEXT PRIMARY KEY,
+    last_price  REAL,
+    last_ts     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS price_history (
@@ -102,6 +114,11 @@ _LISTINGS_MIGRATIONS = {
     "listing_intent": "TEXT",
     "genuinely_free": "INTEGER DEFAULT 0",
     "false_free": "INTEGER DEFAULT 0",
+    "is_advertisement": "INTEGER DEFAULT 0",
+    "availability": "TEXT",
+    "price_in_description": "REAL",
+    "price_dropped_to_zero": "INTEGER DEFAULT 0",
+    "sold": "INTEGER DEFAULT 0",
 }
 
 
@@ -152,8 +169,10 @@ def ingest_report(report: dict[str, Any]) -> int:
                        price_usd, location, url, image_url, ebay_median, ebay_count,
                        est_profit, ratio, verdict,
                        detail_checked, defect_severity, defect_summary, defects_json, for_parts,
-                       listing_intent, genuinely_free, false_free)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       listing_intent, genuinely_free, false_free,
+                       is_advertisement, availability, price_in_description,
+                       price_dropped_to_zero, sold)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     scan_id, ts, r.get("query"), r.get("listing_id"), r.get("title"),
                     r.get("canonical_key"), r.get("canonical_name"), r.get("brand"),
@@ -168,6 +187,9 @@ def ingest_report(report: dict[str, Any]) -> int:
                     int(bool(r.get("for_parts"))),
                     r.get("listing_intent"), int(bool(r.get("genuinely_free"))),
                     int(bool(r.get("false_free"))),
+                    int(bool(r.get("is_advertisement"))), r.get("availability"),
+                    r.get("price_in_description"),
+                    int(bool(r.get("price_dropped_to_zero"))), int(bool(r.get("sold"))),
                 ),
             )
 
@@ -210,6 +232,35 @@ def _resolve_scan_id(conn: sqlite3.Connection, scan_id: Optional[int]) -> Option
         if row:
             return row["id"]
     return _latest_scan_id(conn)
+
+
+def get_prior_prices(listing_ids: list[str]) -> dict[str, float]:
+    """Last-seen price per listing_id from earlier scans (for price-drop detection)."""
+    if not listing_ids:
+        return {}
+    out: dict[str, float] = {}
+    with connect() as conn:
+        # chunk to stay under SQLite's variable limit
+        for i in range(0, len(listing_ids), 400):
+            chunk = listing_ids[i : i + 400]
+            q = "SELECT listing_id, last_price FROM listing_prices WHERE listing_id IN (%s)" % (
+                ",".join("?" * len(chunk))
+            )
+            for row in conn.execute(q, chunk):
+                if row["last_price"] is not None:
+                    out[row["listing_id"]] = row["last_price"]
+    return out
+
+
+def record_listing_prices(pairs: list[tuple[str, float]], ts: str) -> None:
+    """Upsert each listing_id -> current price for next-scan comparison."""
+    with connect() as conn:
+        conn.executemany(
+            """INSERT INTO listing_prices (listing_id, last_price, last_ts) VALUES (?,?,?)
+               ON CONFLICT(listing_id) DO UPDATE SET last_price=excluded.last_price,
+                                                     last_ts=excluded.last_ts""",
+            [(lid, price, ts) for lid, price in pairs if lid],
+        )
 
 
 def get_scans() -> list[dict[str, Any]]:
