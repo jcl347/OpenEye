@@ -79,12 +79,18 @@ def api_scan() -> JSONResponse:
     return JSONResponse({"started": True})
 
 
+CLEAR_PHRASE = "DELETE ALL HISTORY"
+
+
 @app.post("/api/clear")
 def api_clear(confirm: str = "") -> JSONResponse:
-    """Wipe all scan history. Requires ?confirm=ERASE as a server-side second check
-    (the UI also double-confirms before calling this)."""
-    if confirm != "ERASE":
-        return JSONResponse({"cleared": False, "reason": "confirmation token required"}, status_code=400)
+    """Wipe all scan history. Requires the exact confirmation phrase server-side, in
+    addition to the UI's confirm dialog + typed-phrase check. Irreversible."""
+    if confirm != CLEAR_PHRASE:
+        return JSONResponse(
+            {"cleared": False, "reason": f"exact phrase '{CLEAR_PHRASE}' required"},
+            status_code=400,
+        )
     counts = db.clear_all()
     return JSONResponse({"cleared": True, "deleted": counts})
 

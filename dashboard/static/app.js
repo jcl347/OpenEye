@@ -175,21 +175,24 @@ async function refresh() {
 }
 
 // ---------- clear history (double verification) ----------
+const CLEAR_PHRASE = "DELETE ALL HISTORY";
+
 async function clearHistory() {
   // Verification 1: explicit intent confirmation.
-  if (!confirm("Clear ALL scan history?\n\nThis permanently deletes every stored listing, scan, and price-history point. This cannot be undone."))
+  if (!confirm("Clear ALL scan history?\n\nThis permanently deletes every stored listing, scan, and price-history point. This CANNOT be undone."))
     return;
-  // Verification 2: typed confirmation.
-  const typed = prompt('Final check — type ERASE (all caps) to permanently delete all history:');
-  if (typed !== "ERASE") {
-    alert("Cancelled — history was NOT cleared.");
+  // Verification 2: exact-phrase typed validation (case-sensitive).
+  const typed = prompt(`Type the exact phrase to confirm permanent deletion:\n\n${CLEAR_PHRASE}`);
+  if (typed === null) return;                       // user cancelled
+  if (typed !== CLEAR_PHRASE) {
+    alert(`Cancelled — the phrase did not match exactly.\nNothing was deleted.`);
     return;
   }
   const btn = $("clear-btn");
   btn.disabled = true;
   btn.textContent = "Clearing…";
   try {
-    const r = await fetch("/api/clear?confirm=ERASE", { method: "POST" });
+    const r = await fetch("/api/clear?confirm=" + encodeURIComponent(CLEAR_PHRASE), { method: "POST" });
     const j = await r.json();
     if (j.cleared) {
       alert(`Cleared. Deleted ${j.deleted.listings} listings across ${j.deleted.scans} scans.`);
