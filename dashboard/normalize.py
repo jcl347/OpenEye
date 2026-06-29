@@ -84,6 +84,14 @@ _EXTRACT_TOOL = {
                             "type": "boolean",
                             "description": "true if the listing includes EXTRA valuable items beyond the core product (e.g. 'camera body + 2 lenses', 'console + 5 games', 'laptop + dock + bag'). A single-product comp will UNDERSTATE a bundle's resale, so flag it. NOT true for the bare product or trivial inclusions (cables, manuals).",
                         },
+                        "is_gpu": {
+                            "type": "boolean",
+                            "description": "true if this is a graphics card / GPU (e.g. RTX 4090, RX 6700 XT, GTX 1080 Ti, HD 7850, Quadro). GPUs are a priority category — value precisely.",
+                        },
+                        "is_lot": {
+                            "type": "boolean",
+                            "description": "true if the listing appears to sell MULTIPLE separate items (a lot/bulk/multiple-units sale — 'lot of 8 GPUs', '5 graphics cards', 'multiple cards', or a title listing several products). Each item in such a listing should be valued individually from the description.",
+                        },
                         "canonical_name": {
                             "type": "string",
                             "description": (
@@ -106,7 +114,7 @@ _EXTRACT_TOOL = {
                     "required": [
                         "index", "brand", "model", "variant", "condition",
                         "is_part_or_accessory", "is_wanted_ad", "is_advertisement", "is_bundle",
-                        "canonical_name", "ebay_query",
+                        "is_gpu", "is_lot", "canonical_name", "ebay_query",
                     ],
                 },
             }
@@ -121,7 +129,12 @@ _SYSTEM = (
     "stay distinct (Sony A7 IV, A7C II, A7R V are separate; RTX 4090 ≠ RTX 4080; iPhone 15 Pro ≠ "
     "15 Pro Max), but DROP listing noise that fragments categories — color, accessories ('with "
     "stands'), marketing words, parenthetical qualifiers, and SKU numbers. Two listings of the "
-    "same model in different colors must get the SAME canonical_name. Be precise about condition, and "
+    "same model in different colors must get the SAME canonical_name. GRAPHICS CARDS / GPUs are a "
+    "priority category — value them at maximum spec granularity: capture brand (ASUS, EVGA, Sapphire, "
+    "Gigabyte, MSI), the EXACT chipset (RTX 4090, RX 6700 XT, GTX 1080 Ti, HD 7850, RX 460), memory "
+    "size when stated (8GB/16GB/24GB), and edition (Ti, Super, XT, OC, Founders) — each materially "
+    "changes resale, and an RX 460 ≠ RTX 460-class part. Build the ebay_query from chipset + memory + "
+    "edition. Be precise about condition, and "
     "flag parts/accessories, want-to-buy/ISO ads, and dealer/storefront advertisements "
     "(e.g. 'selling PCs for all budgets', 'I build and sell', 'message me for pricing') so "
     "they can be excluded from resale comps. Reason about the meaning of the text — do not "
@@ -153,6 +166,8 @@ def _neutral(title: str) -> dict[str, Any]:
         "is_wanted_ad": False,
         "is_advertisement": False,
         "is_bundle": False,
+        "is_gpu": False,
+        "is_lot": False,
         "canonical_name": t,
         "ebay_query": t,
     }
@@ -169,6 +184,8 @@ def _normalize_record(raw: dict[str, Any], title: str) -> dict[str, Any]:
         "is_wanted_ad": bool(raw.get("is_wanted_ad", False)),
         "is_advertisement": bool(raw.get("is_advertisement", False)),
         "is_bundle": bool(raw.get("is_bundle", False)),
+        "is_gpu": bool(raw.get("is_gpu", False)),
+        "is_lot": bool(raw.get("is_lot", False)),
         "canonical_name": raw.get("canonical_name", "") or title,
         "ebay_query": (raw.get("ebay_query", "") or title).strip(),
     }

@@ -24,6 +24,7 @@ DEFAULTS = {
     "min_profit_usd": 100,
     "resale_fee_rate": 0.13,
     "resale_ship_usd": 12,
+    "resale_haircut": 0.88,  # CONSERVATIVE: assume you net ~88% of the median sold price (quick sale)
 }
 
 
@@ -100,7 +101,10 @@ def score_listing(
         return out
 
     is_free = price_usd == 0
-    net_resale = median * (1 - eff["resale_fee_rate"]) - eff["resale_ship_usd"]
+    # Conservative: haircut the median (you rarely hit the exact median on a quick flip), then
+    # subtract fees and shipping.
+    conservative_value = median * eff.get("resale_haircut", 1.0)
+    net_resale = conservative_value * (1 - eff["resale_fee_rate"]) - eff["resale_ship_usd"]
     profit = net_resale - price_usd
     ratio = price_usd / median  # 0.0 for free items
 

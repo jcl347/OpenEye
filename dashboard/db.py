@@ -74,7 +74,10 @@ CREATE TABLE IF NOT EXISTS listings (
     is_bundle       INTEGER DEFAULT 0,           -- includes extra items; comp may understate
     confidence      REAL,                         -- comp-depth confidence factor 0..1
     deal_score      REAL,                         -- profit × confidence (ranking key)
-    comp_method     TEXT                          -- llm | fallback | llm-none
+    comp_method     TEXT,                         -- llm | fallback | llm-none
+    is_gpu          INTEGER DEFAULT 0,            -- graphics card (priority category)
+    is_lot          INTEGER DEFAULT 0,            -- multi-item listing
+    sub_deals       TEXT                          -- JSON: per-item valuations for a lot
 );
 
 -- Per-listing price memory across scans (survives the per-scan listings churn).
@@ -127,6 +130,9 @@ _LISTINGS_MIGRATIONS = {
     "confidence": "REAL",
     "deal_score": "REAL",
     "comp_method": "TEXT",
+    "is_gpu": "INTEGER DEFAULT 0",
+    "is_lot": "INTEGER DEFAULT 0",
+    "sub_deals": "TEXT",
 }
 
 
@@ -180,8 +186,9 @@ def ingest_report(report: dict[str, Any]) -> int:
                        listing_intent, genuinely_free, false_free,
                        is_advertisement, availability, price_in_description,
                        price_dropped_to_zero, sold,
-                       is_bundle, confidence, deal_score, comp_method)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       is_bundle, confidence, deal_score, comp_method,
+                       is_gpu, is_lot, sub_deals)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     scan_id, ts, r.get("query"), r.get("listing_id"), r.get("title"),
                     r.get("canonical_key"), r.get("canonical_name"), r.get("brand"),
@@ -201,6 +208,8 @@ def ingest_report(report: dict[str, Any]) -> int:
                     int(bool(r.get("price_dropped_to_zero"))), int(bool(r.get("sold"))),
                     int(bool(r.get("is_bundle"))), r.get("confidence"),
                     r.get("deal_score"), r.get("comp_method"),
+                    int(bool(r.get("is_gpu"))), int(bool(r.get("is_lot"))),
+                    r.get("sub_deals"),
                 ),
             )
 

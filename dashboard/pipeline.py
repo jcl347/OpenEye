@@ -43,7 +43,7 @@ MAX_FREE_PER_ITEM = 8               # extra slots for the FREE sweep (high-value
 FREE_SWEEP_DAYS = 30               # widen recency for free items (rarer)
 SCROLL_ROUNDS = 0                  # logged-out scroll is walled; 0 until a login session exists
 MAX_COMPS = 90                      # cap eBay lookups (now per product+condition pair); excess -> low-confidence
-DEFECT_CHECK_CAP = 24              # cap description reads per scan (deals + free vetting)
+DEFECT_CHECK_CAP = 30              # cap description reads per scan (deals + free + GPUs/lots)
 EBAY_CONDITIONS = {"new", "used", "open box", "refurbished"}
 
 # --- Concurrency: parallelism speeds + effectively widens the scan. eBay tolerates it
@@ -141,6 +141,82 @@ def _merge_dedup(*lists: list[dict]) -> list[dict]:
                 seen.add(lid)
             out.append(l)
     return out
+
+
+def _value_multi_items(multi_rows: list, defaults: dict, eff_by_key: dict) -> int:
+    """For each (row, items=[{name, price_usd}]), value every item against eBay individually and
+    attach row['sub_deals'] (JSON). If a sub-item is itself a deal, promote the listing's headline
+    to that exact sub-item — INCLUDING its price — so asking/median/ratio/profit all describe the
+    same item. Blocked listings (sold/broken/dealer-ad/false-free) are skipped entirely."""
+    default_eff = scoring.effective_thresholds({}, defaults)
+    multi_rows = [(r, items) for r, items in multi_rows
+                  if not (r.get("sold") or r.get("for_parts")
+                          or r.get("is_advertisement") or r.get("false_free"))]
+    flat: list[list] = []  # [row, name, price]
+    for row, items in multi_rows:
+        for it in (items or []):
+            name = (it.get("name") or "").strip()
+            price = it.get("price_usd")
+            if name and isinstance(price, (int, float)) and price >= 0:
+                flat.append([row, name, float(price)])
+    if not flat:
+        return 0
+
+    norm = normalize.normalize_titles([f[1] for f in flat], category_hint="lot of items (GPUs/components)")
+
+    # One LLM-filtered eBay comp per distinct sub-product (used), like the main flow.
+    groups: dict[tuple, tuple] = {}
+    for (row, name, price), nr in zip(flat, norm):
+        groups.setdefault((nr["canonical_key"] or name.lower(), "used"),
+                          (nr["ebay_query"] or name, nr["canonical_name"] or name))
+
+    def fetch(g):
+        ebay_query, product = groups[g]
+        comp = run_ebay(ebay_query, g[1])
+        return g, comps.filter_comps(product, g[1], comp.get("raw_comps", []),
+                                     fallback_median=comp.get("median"), fallback_count=comp.get("count", 0))
+
+    comp_of: dict[tuple, dict] = {}
+    with ThreadPoolExecutor(max_workers=EBAY_CONCURRENCY) as ex:
+        for g, filt in ex.map(fetch, list(groups)):
+            comp_of[g] = filt
+
+    per_row: dict[int, list] = {}
+    for (row, name, price), nr in zip(flat, norm):
+        filt = comp_of.get((nr["canonical_key"] or name.lower(), "used"), {})
+        median, count = filt.get("median"), filt.get("count", 0)
+        eff = eff_by_key.get(row.get("canonical_key"), default_eff)  # parent's thresholds
+        s = scoring.score_listing(price, median, count, eff, comp_method=filt.get("method"))
+        per_row.setdefault(id(row), []).append({
+            "name": nr["canonical_name"] or name, "price": round(price, 2),
+            "ebay_median": median, "ebay_count": count, "est_profit": s["est_profit"],
+            "deal_score": s.get("deal_score"), "ratio": s.get("ratio"),
+            "confidence": s.get("confidence"), "net_resale": s.get("net_resale"),
+            "comp_method": filt.get("method"), "verdict": s["verdict"],
+        })
+
+    n = 0
+    for row, _items in multi_rows:
+        sd = per_row.get(id(row))
+        if not sd:
+            continue
+        n += 1
+        sd.sort(key=lambda x: (x["est_profit"] is None, -(x["est_profit"] or 0)))
+        row["sub_deals"] = json.dumps(sd)
+        row["is_lot"] = 1
+        # Promote the headline to the best sub-item that is ITSELF a deal — so asking, median,
+        # ratio, profit, confidence all refer to the same purchasable item (its own price).
+        deal_subs = [x for x in sd if x["verdict"] == "deal"]
+        if deal_subs:
+            best = max(deal_subs, key=lambda x: x["est_profit"] or -1e18)
+            row.update({
+                "price_usd": best["price"], "est_profit": best["est_profit"],
+                "ebay_median": best["ebay_median"], "ebay_count": best["ebay_count"],
+                "ratio": best.get("ratio"), "deal_score": best["deal_score"],
+                "confidence": best.get("confidence"), "net_resale": best.get("net_resale"),
+                "comp_method": best.get("comp_method"), "verdict": "deal",
+            })
+    return n
 
 
 def run_ebay(query: str, condition: str | None) -> dict:
@@ -334,13 +410,21 @@ def main() -> None:
                      ("is_bundle", int(bool(r.get("is_bundle")))),
                      ("availability", None), ("price_in_description", None),
                      ("price_dropped_to_zero", 0), ("sold", 0),
-                     ("confidence", None), ("deal_score", None), ("comp_method", r.get("comp_method"))):
+                     ("confidence", None), ("deal_score", None), ("comp_method", r.get("comp_method")),
+                     ("is_gpu", int(bool(r.get("is_gpu")))), ("is_lot", int(bool(r.get("is_lot")))),
+                     ("sub_deals", None)):
             r.setdefault(k, v)
 
     # ---- 4b. Defect / condition read via Claude (top candidates only) ----
+    # GPUs and multi-item LOTS are prioritized: lots must be read to decompose into per-item
+    # sub-deals, and GPUs are the priority category for precise eBay valuation.
     def _priority(r):
         order = {"deal": 0, "review": 2}.get(r["verdict"], 3)
         if r["price_usd"] == 0:          # free items are always worth a condition read
+            order = min(order, 1)
+        if r.get("is_lot"):              # lots: read to split into per-item comparisons
+            order = min(order, 0)
+        if r.get("is_gpu"):              # GPUs: priority category
             order = min(order, 1)
         return (order, -(r.get("est_profit") or 0))
 
@@ -348,6 +432,7 @@ def main() -> None:
         r for r in rows
         if r["verdict"] in ("deal", "review")
         or (r["price_usd"] == 0 and not r["is_part"] and not r["is_wanted_ad"])
+        or r.get("is_gpu") or r.get("is_lot")
     ]
     candidates.sort(key=_priority)
     candidates = candidates[:DEFECT_CHECK_CAP]
@@ -381,6 +466,8 @@ def main() -> None:
                 "listing_intent": a["listing_intent"], "availability": a["availability"],
                 "price_in_description": a.get("price_in_description") or None,
             })
+            # Multi-item lot: stash the per-item list to value each against eBay after the loop.
+            r["_multi_items"] = a.get("multi_items") or []
 
             # SOLD / pending / unavailable (incl. misspellings) -> remove, it can't be bought.
             if a["availability"] in ("sold", "pending", "unavailable"):
@@ -423,6 +510,12 @@ def main() -> None:
                 r["verdict"] = "review"
     if false_free:
         print(f"[defects] negated {false_free} false-'free' listings", flush=True)
+
+    # ---- 4b-ii. Multi-item LOTS: value each item in the description against eBay separately ----
+    multi_rows = [(r, r.pop("_multi_items")) for r in rows if r.get("_multi_items")]
+    if multi_rows:
+        n_lots = _value_multi_items(multi_rows, defaults, eff_by_key)
+        print(f"[lots] split + valued sub-items for {n_lots} multi-item listing(s)", flush=True)
 
     # ---- 4c. Tally + rank ----
     deals = sum(1 for r in rows if r["verdict"] == "deal")

@@ -195,6 +195,13 @@ function defectCell(r) {
   else if (r.genuinely_free) badges.push(tag("bg-emerald-500/15 text-emerald-300", "✓ genuine free", "confirmed giveaway"));
   if (r.price_in_description) badges.push(tag("bg-slate-500/20 text-slate-200", `listed $${Math.round(r.price_in_description)} in text`, "real price found in the description"));
   if (r.is_bundle) badges.push(tag("bg-violet-500/20 text-violet-200", "bundle", "includes extra items — single-item comp may understate resale"));
+  if (r.is_gpu) badges.push(tag("bg-cyan-500/20 text-cyan-200", "GPU", "graphics card — priority category"));
+  if (r.is_lot) {
+    let n = 0;
+    try { const sd = r.sub_deals ? JSON.parse(r.sub_deals) : null; if (Array.isArray(sd)) n = sd.length; } catch (e) {}
+    badges.push(tag("bg-fuchsia-500/20 text-fuchsia-200", n ? `lot · ${n} items` : "lot",
+      n ? "each item valued vs eBay below" : "multi-item listing"));
+  }
 
   let sev = "";
   if (r.detail_checked) {
@@ -211,6 +218,19 @@ function defectCell(r) {
   return `<div class="flex flex-wrap items-center gap-1">${badges.join("")}${sev}</div>`;
 }
 
+function subDealsHtml(r) {
+  if (!r.sub_deals) return "";
+  let sd; try { sd = JSON.parse(r.sub_deals); } catch (e) { return ""; }
+  if (!sd.length) return "";
+  const items = sd.slice(0, 14).map((d) => {
+    const prof = d.est_profit == null ? "<span class='text-slate-500'>—</span>"
+      : (d.est_profit > 0 ? `<span class="text-emerald-400">+${fmtUsd(d.est_profit)}</span>` : `<span class="text-slate-500">${fmtUsd(d.est_profit)}</span>`);
+    const med = d.ebay_median ? fmtUsd(d.ebay_median) + ` <span class="text-slate-500">(${d.ebay_count})</span>` : "<span class='text-slate-600'>no comp</span>";
+    return `<div class="flex gap-2 text-[11px] py-0.5"><span class="text-slate-300 flex-1 truncate">${(d.name || "").slice(0, 42)}</span><span class="text-slate-400 w-28 text-right">${fmtUsd(d.price)} → ${med}</span><span class="w-16 text-right">${prof}</span></div>`;
+  }).join("");
+  return `<details class="mt-1"><summary class="text-[11px] text-fuchsia-300 cursor-pointer">📦 ${sd.length} items compared to eBay</summary><div class="mt-1 pl-2 border-l border-white/10">${items}</div></details>`;
+}
+
 function render(rows) {
   const body = $("deals-body");
   $("table-empty").classList.toggle("hidden", rows.length > 0);
@@ -222,13 +242,13 @@ function render(rows) {
       ? `<div class="text-[11px] text-slate-500">${r.canonical_name}</div>` : "";
     const freeBadge = r.price_usd === 0 ? `<span class="ml-1 px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[10px] font-semibold">FREE</span>` : "";
     const profitColor = r.est_profit > 0 ? "text-emerald-400" : "text-slate-500";
-    return `<tr class="border-b border-white/5 hover:bg-white/5">
+    return `<tr class="border-b border-white/5 hover:bg-white/5 align-top">
       <td class="px-5 py-2.5 font-semibold ${profitColor}">${r.est_profit == null ? "—" : fmtUsd(r.est_profit)}</td>
       <td class="px-3 py-2.5">${r.price_usd === 0 ? '<span class="text-sky-300 font-semibold">Free</span>' : fmtUsd(r.price_usd)}</td>
       <td class="px-3 py-2.5">${r.ebay_median ? fmtUsd(r.ebay_median) + ` <span class="${confColor(r.confidence)}" title="comp confidence ${r.confidence != null ? Math.round(r.confidence * 100) + "%" : "?"} · ${r.comp_method || ""}">(${r.ebay_count})</span>` : "—"}</td>
       <td class="px-3 py-2.5">${r.ratio == null ? "—" : r.ratio.toFixed(2)}</td>
       <td class="px-3 py-2.5">${defectCell(r)}</td>
-      <td class="px-3 py-2.5">${titleCell}${freeBadge}${sub}</td>
+      <td class="px-3 py-2.5">${titleCell}${freeBadge}${sub}${subDealsHtml(r)}</td>
       <td class="px-3 py-2.5 text-slate-400">${r.location || ""}</td>
       <td class="px-3 py-2.5"><span class="px-2 py-0.5 rounded-full text-xs ${vcls}">${vlabel}</span></td>
     </tr>`;
