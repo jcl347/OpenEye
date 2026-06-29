@@ -13,6 +13,9 @@ let currentScanId = null;   // null = latest scan; set to view a historical scan
 const isGenuineFree = (r) =>
   r.price_usd === 0 && !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement;
 
+// Comp-confidence color for the (n) sample-size chip: green=solid, amber=thin, red=very thin.
+const confColor = (c) => (c == null ? "text-slate-500" : c >= 0.66 ? "text-emerald-400" : c >= 0.33 ? "text-amber-400" : "text-rose-400");
+
 const scanParam = () => (currentScanId ? "?scan_id=" + currentScanId : "");
 const withScan = (url) => url + (currentScanId ? (url.includes("?") ? "&" : "?") + "scan_id=" + currentScanId : "");
 
@@ -192,6 +195,7 @@ function defectCell(r) {
   if (r.false_free) badges.push(tag("bg-rose-600/30 text-rose-200", `not really free (${r.listing_intent || "?"})`, "the $0 price isn't genuine"));
   else if (r.genuinely_free) badges.push(tag("bg-emerald-500/15 text-emerald-300", "✓ genuine free", "confirmed giveaway"));
   if (r.price_in_description) badges.push(tag("bg-slate-500/20 text-slate-200", `listed $${Math.round(r.price_in_description)} in text`, "real price found in the description"));
+  if (r.is_bundle) badges.push(tag("bg-violet-500/20 text-violet-200", "bundle", "includes extra items — single-item comp may understate resale"));
 
   let sev = "";
   if (r.detail_checked) {
@@ -222,7 +226,7 @@ function render(rows) {
     return `<tr class="border-b border-white/5 hover:bg-white/5">
       <td class="px-5 py-2.5 font-semibold ${profitColor}">${r.est_profit == null ? "—" : fmtUsd(r.est_profit)}</td>
       <td class="px-3 py-2.5">${r.price_usd === 0 ? '<span class="text-sky-300 font-semibold">Free</span>' : fmtUsd(r.price_usd)}</td>
-      <td class="px-3 py-2.5">${r.ebay_median ? fmtUsd(r.ebay_median) + ` <span class="text-slate-500">(${r.ebay_count})</span>` : "—"}</td>
+      <td class="px-3 py-2.5">${r.ebay_median ? fmtUsd(r.ebay_median) + ` <span class="${confColor(r.confidence)}" title="comp confidence ${r.confidence != null ? Math.round(r.confidence * 100) + "%" : "?"} · ${r.comp_method || ""}">(${r.ebay_count})</span>` : "—"}</td>
       <td class="px-3 py-2.5">${r.ratio == null ? "—" : r.ratio.toFixed(2)}</td>
       <td class="px-3 py-2.5">${defectCell(r)}</td>
       <td class="px-3 py-2.5">${titleCell}${freeBadge}${sub}</td>

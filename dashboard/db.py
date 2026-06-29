@@ -70,7 +70,11 @@ CREATE TABLE IF NOT EXISTS listings (
     availability    TEXT,                        -- available | sold | pending | unavailable
     price_in_description REAL,                   -- real asking price found in the description, if any
     price_dropped_to_zero INTEGER DEFAULT 0,     -- was priced > 0 in a prior scan, now $0
-    sold            INTEGER DEFAULT 0
+    sold            INTEGER DEFAULT 0,
+    is_bundle       INTEGER DEFAULT 0,           -- includes extra items; comp may understate
+    confidence      REAL,                         -- comp-depth confidence factor 0..1
+    deal_score      REAL,                         -- profit × confidence (ranking key)
+    comp_method     TEXT                          -- llm | fallback | llm-none
 );
 
 -- Per-listing price memory across scans (survives the per-scan listings churn).
@@ -119,6 +123,10 @@ _LISTINGS_MIGRATIONS = {
     "price_in_description": "REAL",
     "price_dropped_to_zero": "INTEGER DEFAULT 0",
     "sold": "INTEGER DEFAULT 0",
+    "is_bundle": "INTEGER DEFAULT 0",
+    "confidence": "REAL",
+    "deal_score": "REAL",
+    "comp_method": "TEXT",
 }
 
 
@@ -171,8 +179,9 @@ def ingest_report(report: dict[str, Any]) -> int:
                        detail_checked, defect_severity, defect_summary, defects_json, for_parts,
                        listing_intent, genuinely_free, false_free,
                        is_advertisement, availability, price_in_description,
-                       price_dropped_to_zero, sold)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       price_dropped_to_zero, sold,
+                       is_bundle, confidence, deal_score, comp_method)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     scan_id, ts, r.get("query"), r.get("listing_id"), r.get("title"),
                     r.get("canonical_key"), r.get("canonical_name"), r.get("brand"),
@@ -190,6 +199,8 @@ def ingest_report(report: dict[str, Any]) -> int:
                     int(bool(r.get("is_advertisement"))), r.get("availability"),
                     r.get("price_in_description"),
                     int(bool(r.get("price_dropped_to_zero"))), int(bool(r.get("sold"))),
+                    int(bool(r.get("is_bundle"))), r.get("confidence"),
+                    r.get("deal_score"), r.get("comp_method"),
                 ),
             )
 
@@ -322,7 +333,11 @@ def get_listings(verdict: Optional[str] = None, scan_id: Optional[int] = None) -
         if verdict:
             sql += " AND verdict=?"
             params.append(verdict)
-        sql += " ORDER BY (est_profit IS NULL), est_profit DESC"
+        # Verdict priority first (deals/review on top even in the "All" view), then within a
+        # verdict rank by confidence-weighted deal_score, with profit as a tiebreak.
+        sql += (" ORDER BY CASE verdict WHEN 'deal' THEN 0 WHEN 'review' THEN 1 "
+                "WHEN 'low-confidence' THEN 2 ELSE 3 END, "
+                "(deal_score IS NULL), deal_score DESC, (est_profit IS NULL), est_profit DESC")
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 

@@ -192,8 +192,14 @@ def summarize(query: str, items: list[SoldItem], source_url: str, sample_n: int 
         "currency": "USD",
         "count": len(prices),
         "raw_result_count": len(items),
-        "matched_on": match_tokens,  # model-number tokens the comps were pinned to
+        "matched_on": match_tokens,  # model-number tokens the comps were pinned to (fallback filter)
         "source_url": source_url,
+        # ALL parsed USD sold items (title + price), so a downstream LLM relevance pass can
+        # decide which are truly the same product (no keyword/digit-token guessing).
+        "raw_comps": [
+            {"title": it.title, "price": it.price, "sold_date": it.sold_date, "url": it.url}
+            for it in usd[:60]
+        ],
     }
 
     if not prices:

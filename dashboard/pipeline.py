@@ -27,6 +27,7 @@ from pathlib import Path
 
 import yaml
 
+import comps
 import db
 import defects
 import normalize
@@ -41,7 +42,7 @@ MAX_LISTINGS_PER_ITEM = 20          # per query (anonymous FB returns ~1 page ei
 MAX_FREE_PER_ITEM = 8               # extra slots for the FREE sweep (high-value free finds)
 FREE_SWEEP_DAYS = 30               # widen recency for free items (rarer)
 SCROLL_ROUNDS = 0                  # logged-out scroll is walled; 0 until a login session exists
-MAX_COMPS = 65                      # cap eBay lookups per scan (time/cost); excess -> low-confidence
+MAX_COMPS = 90                      # cap eBay lookups (now per product+condition pair); excess -> low-confidence
 DEFECT_CHECK_CAP = 24              # cap description reads per scan (deals + free vetting)
 EBAY_CONDITIONS = {"new", "used", "open box", "refurbished"}
 
@@ -255,36 +256,50 @@ def main() -> None:
     if dropped:
         print(f"[price] {dropped} listing(s) dropped from a prior price to $0 (likely sold/zeroed)", flush=True)
 
-    # ---- 3. One eBay comp per canonical product (skip parts / want-ads / dealer ads) ----
+    # ---- 3. eBay comp per (product, CONDITION), then an LLM relevance pass over the raw
+    #         sold listings (no keyword/digit-token guessing) before taking the median. ----
+    def cond_bucket(c: "str | None") -> str:
+        c = (c or "").lower().strip()
+        return c if c in EBAY_CONDITIONS else "used"  # unknown -> value as used
+
+    # Exclude for-parts/broken units from clean comp valuation (don't value a broken unit
+    # against working comps — the defect reader also routes these to skip).
     real = [r for r in rows if not r["is_part"] and not r["is_wanted_ad"]
-            and not r.get("is_advertisement") and r["canonical_key"]]
-    by_key: dict[str, list[dict]] = collections.defaultdict(list)
+            and not r.get("is_advertisement") and r["canonical_key"]
+            and (r.get("condition") or "").lower().strip() != "for parts"]
+    by_group: dict[tuple, list[dict]] = collections.defaultdict(list)
     for r in real:
-        by_key[r["canonical_key"]].append(r)
+        by_group[(r["canonical_key"], cond_bucket(r["condition"]))].append(r)
 
-    # Look up the most-listed products first; cap the rest as low-confidence.
-    ranked_keys = sorted(by_key, key=lambda k: len(by_key[k]), reverse=True)
-    if len(ranked_keys) > MAX_COMPS:
-        print(f"[comp] {len(ranked_keys)} products; fetching comps for top {MAX_COMPS}, "
-              f"{len(ranked_keys) - MAX_COMPS} left as low-confidence (MAX_COMPS).")
-    comp_keys = [k for k in ranked_keys if k in set(ranked_keys[:MAX_COMPS])]
+    # Most-listed (product, condition) pairs first; cap the rest as low-confidence.
+    ranked = sorted(by_group, key=lambda g: len(by_group[g]), reverse=True)
+    if len(ranked) > MAX_COMPS:
+        print(f"[comp] {len(ranked)} (product,condition) pairs; fetching top {MAX_COMPS}, "
+              f"{len(ranked) - MAX_COMPS} left low-confidence (MAX_COMPS).", flush=True)
+    comp_groups = ranked[:MAX_COMPS]
 
-    def fetch_comp(key: str):
-        group = by_key[key]
-        ebay_query = collections.Counter(r["ebay_query"] for r in group).most_common(1)[0][0]
-        cond_mode = collections.Counter(r["condition"] for r in group).most_common(1)[0][0]
-        return key, ebay_query, run_ebay(ebay_query, cond_mode)
+    def fetch_and_filter(group: tuple):
+        key, cond = group
+        members = by_group[group]
+        ebay_query = collections.Counter(r["ebay_query"] for r in members).most_common(1)[0][0]
+        product_name = collections.Counter(r["canonical_name"] for r in members).most_common(1)[0][0]
+        comp = run_ebay(ebay_query, cond)
+        filt = comps.filter_comps(
+            product_name, cond, comp.get("raw_comps", []),
+            fallback_median=comp.get("median"), fallback_count=comp.get("count", 0),
+        )
+        return group, filt
 
-    comps: dict[str, dict] = {}
-    print(f"[comp] fetching {len(comp_keys)} comps ({EBAY_CONCURRENCY}-way parallel) ...", flush=True)
+    print(f"[comp] fetching + LLM-filtering {len(comp_groups)} (product,condition) comps "
+          f"({EBAY_CONCURRENCY}-way) ...", flush=True)
     with ThreadPoolExecutor(max_workers=EBAY_CONCURRENCY) as ex:
-        for key, ebay_query, comp in ex.map(fetch_comp, comp_keys):
-            comps[key] = comp
-            median, count = comp.get("median"), comp.get("count", 0)
-            for r in by_key[key]:
+        for group, filt in ex.map(fetch_and_filter, comp_groups):
+            median, count = filt.get("median"), filt.get("count", 0)
+            for r in by_group[group]:
                 r["ebay_median"] = median
                 r["ebay_count"] = count or 0
-            print(f"  {key} -> ${median} (n={count})", flush=True)
+                r["comp_method"] = filt.get("method")
+            print(f"  {group[0]} [{group[1]}] -> ${median} (n={count}, {filt.get('method')})", flush=True)
 
     # ---- 4. Score ----
     for r in rows:
@@ -293,14 +308,17 @@ def main() -> None:
             r["price_usd"], r["ebay_median"], r["ebay_count"], eff,
             is_part=r["is_part"], is_wanted_ad=r["is_wanted_ad"],
             is_advertisement=r.get("is_advertisement", False),
+            comp_method=r.get("comp_method"),
         )
         r.update(s)
         for k, v in (("detail_checked", 0), ("defect_severity", None),
                      ("defect_summary", None), ("defects_json", None), ("for_parts", 0),
                      ("listing_intent", None), ("genuinely_free", 0), ("false_free", 0),
                      ("is_advertisement", int(bool(r.get("is_advertisement")))),
+                     ("is_bundle", int(bool(r.get("is_bundle")))),
                      ("availability", None), ("price_in_description", None),
-                     ("price_dropped_to_zero", 0), ("sold", 0)):
+                     ("price_dropped_to_zero", 0), ("sold", 0),
+                     ("confidence", None), ("deal_score", None), ("comp_method", r.get("comp_method"))):
             r.setdefault(k, v)
 
     # ---- 4b. Defect / condition read via Claude (top candidates only) ----
@@ -393,7 +411,8 @@ def main() -> None:
     # ---- 4c. Tally + rank ----
     deals = sum(1 for r in rows if r["verdict"] == "deal")
     review = sum(1 for r in rows if r["verdict"] == "review")
-    rows.sort(key=lambda r: (r.get("est_profit") is None, -(r.get("est_profit") or 0)))
+    # Rank by confidence-weighted deal_score (profit × comp depth), not raw profit.
+    rows.sort(key=lambda r: (r.get("deal_score") is None, -(r.get("deal_score") or 0)))
 
     # ---- 5. Persist: report JSON (+ MD) and DB ingest ----
     report = {

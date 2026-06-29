@@ -6,7 +6,7 @@
 # scam-prone). Effective values = these defaults + any per-item override below.
 defaults:
   days: 7                 # listing recency filter. MCP supports ONLY 1, 7, or 30.
-  min_comp_samples: 8     # electronics are high-volume on eBay → demand more comps for confidence
+  min_comp_samples: 5     # comps are LLM-curated to the exact product, so fewer are needed for confidence
   max_asking_ratio: 0.70  # flag when asking <= 70% of median sold (electronics flip fast even at 70%)
   min_profit_usd: 100     # ...AND >= $100 net profit (skip trivial-margin electronics flips)
   resale_fee_rate: 0.13   # assumed resale platform + payment fees (~13% for eBay)

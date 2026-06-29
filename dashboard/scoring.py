@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 DEFAULTS = {
     "days": 7,
-    "min_comp_samples": 8,
+    "min_comp_samples": 5,   # comps are now LLM-curated (same-product) — a clean n=5 beats a raw n=20
     "max_asking_ratio": 0.70,
     "min_profit_usd": 100,
     "resale_fee_rate": 0.13,
@@ -84,6 +84,7 @@ def score_listing(
     is_part: bool = False,
     is_wanted_ad: bool = False,
     is_advertisement: bool = False,
+    comp_method: Optional[str] = None,
 ) -> dict[str, Any]:
     """Return {verdict, est_profit, ratio, net_resale} for one listing."""
     out: dict[str, Any] = {"est_profit": None, "ratio": None, "net_resale": None}
@@ -102,9 +103,23 @@ def score_listing(
     net_resale = median * (1 - eff["resale_fee_rate"]) - eff["resale_ship_usd"]
     profit = net_resale - price_usd
     ratio = price_usd / median  # 0.0 for free items
-    out.update(
-        {"est_profit": round(profit, 2), "ratio": round(ratio, 4), "net_resale": round(net_resale, 2)}
-    )
+
+    # Confidence factor in [0,1]: comp depth relative to a healthy sample (~3× the gate),
+    # so a deal on 200 comps outranks the same profit on 8. deal_score blends them for ranking.
+    target_n = max(1, eff["min_comp_samples"] * 3)
+    confidence = max(0.0, min(1.0, n / target_n))
+    # A 'fallback' median came from the keyword filter (parts-polluted, not LLM-curated) —
+    # cap its confidence so polluted comps can't outrank genuinely-verified ones.
+    if comp_method == "fallback":
+        confidence = min(confidence, 0.4)
+    deal_score = round(profit * (0.5 + 0.5 * confidence), 2)  # profit weighted by confidence
+    out.update({
+        "est_profit": round(profit, 2),
+        "ratio": round(ratio, 4),
+        "net_resale": round(net_resale, 2),
+        "confidence": round(confidence, 2),
+        "deal_score": deal_score,
+    })
 
     if n < eff["min_comp_samples"]:
         out["verdict"] = "low-confidence"

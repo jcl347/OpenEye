@@ -80,6 +80,10 @@ _EXTRACT_TOOL = {
                             "type": "boolean",
                             "description": "true if this is a DEALER / STOREFRONT / solicitation post, not one specific item: tells include 'selling X for all budgets', 'all budgets and needs', 'custom builds', 'I build and sell', 'message/DM me for pricing', 'any budget', multiple builds/tiers. These are not a single buyable listing.",
                         },
+                        "is_bundle": {
+                            "type": "boolean",
+                            "description": "true if the listing includes EXTRA valuable items beyond the core product (e.g. 'camera body + 2 lenses', 'console + 5 games', 'laptop + dock + bag'). A single-product comp will UNDERSTATE a bundle's resale, so flag it. NOT true for the bare product or trivial inclusions (cables, manuals).",
+                        },
                         "canonical_name": {
                             "type": "string",
                             "description": (
@@ -101,7 +105,7 @@ _EXTRACT_TOOL = {
                     },
                     "required": [
                         "index", "brand", "model", "variant", "condition",
-                        "is_part_or_accessory", "is_wanted_ad", "is_advertisement",
+                        "is_part_or_accessory", "is_wanted_ad", "is_advertisement", "is_bundle",
                         "canonical_name", "ebay_query",
                     ],
                 },
@@ -148,6 +152,7 @@ def _neutral(title: str) -> dict[str, Any]:
         "is_part_or_accessory": False,
         "is_wanted_ad": False,
         "is_advertisement": False,
+        "is_bundle": False,
         "canonical_name": t,
         "ebay_query": t,
     }
@@ -163,6 +168,7 @@ def _normalize_record(raw: dict[str, Any], title: str) -> dict[str, Any]:
         "is_part": bool(raw.get("is_part_or_accessory", False)),
         "is_wanted_ad": bool(raw.get("is_wanted_ad", False)),
         "is_advertisement": bool(raw.get("is_advertisement", False)),
+        "is_bundle": bool(raw.get("is_bundle", False)),
         "canonical_name": raw.get("canonical_name", "") or title,
         "ebay_query": (raw.get("ebay_query", "") or title).strip(),
     }
