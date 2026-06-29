@@ -57,10 +57,8 @@ async function loadSummary() {
   $("empty").classList.add("hidden");
   $("hist-indicator").classList.toggle("hidden", !!s.is_latest);
   $("last-scan").textContent = (s.is_latest ? "Last scan: " : "Scan: ") + (s.last_scan_ts || "—").replace("T", " ");
-  // Genuine free = $0 AND not a sale/mislist/sold/ad/broken.
-  const freeFinds = allListings.filter((r) =>
-    r.price_usd === 0 && !r.false_free && !r.price_in_description &&
-    !r.sold && !r.is_advertisement && !r.for_parts && !r.is_wanted_ad && !r.is_part).length;
+  // Genuine free = $0 AND not flagged as false-free (trade / sale / mislist / dealer ad).
+  const freeFinds = allListings.filter((r) => r.price_usd === 0 && !r.false_free).length;
   $("kpis").innerHTML = [
     kpiCard("Deals found", s.deals_count, "emerald", "buy-worthy margin"),
     kpiCard("Potential profit", fmtUsd(s.total_potential_profit), "emerald", "sum of est. profit"),
@@ -90,117 +88,72 @@ function loadVerdictChart() {
   });
 }
 
-async function loadProducts() {
-  // The selector groups by broad CATEGORY (Monitor, Laptop, GPU…) plus an "All" option.
-  const cats = await getJSON(withScan("/api/categories"));
+const CAT_COLORS = ["#34d399", "#818cf8", "#fbbf24", "#f472b6", "#22d3ee", "#a3e635", "#fb923c", "#c084fc", "#2dd4bf", "#f87171", "#60a5fa", "#facc15"];
+
+async function loadProfitCategories() {
+  const cats = await getJSON("/api/profit/categories");
   const sel = $("product-select");
-  sel.innerHTML = ['<option value="All">All categories</option>']
-    .concat(cats.map((c) => `<option value="${encodeURIComponent(c)}">${c}</option>`))
-    .join("");
-  historyChart = historyChart || echarts.init($("history-chart"));
-  loadProfitHistory("All");
+  // "All categories" is the catch-all (default).
+  const opts = ['<option value="__all__">★ All categories</option>'];
+  for (const c of cats) {
+    opts.push(`<option value="${encodeURIComponent(c.canonical_key)}">${c.canonical_name || c.canonical_key} · best $${Math.round(c.best_profit)}</option>`);
+  }
+  sel.innerHTML = opts.join("");
+  loadProfit("__all__");
 }
 
-async function loadProfitHistory(category) {
-  const qs = category && category !== "All" ? "?category=" + encodeURIComponent(category) : "";
-  // Aggregate trend line + individual clickable item bubbles.
-  const [trend, points] = await Promise.all([
-    getJSON("/api/profit_history" + qs),
-    getJSON("/api/profit_points" + qs),
-  ]);
-  const line = trend.map((r) => [r.ts.replace("T", " "), Math.round(r.profit)]);
-  const bubbles = points.map((p) => ({
-    value: [p.ts.replace("T", " "), Math.round(p.est_profit)],
-    name: p.canonical_name || "", url: p.url || "", verdict: p.verdict,
-    price: p.price_usd, median: p.ebay_median, n: p.ebay_count,
-    itemStyle: { color: p.verdict === "deal" ? "#34d399" : "#fbbf24" },
-  }));
-  const label = category === "All" ? "All categories" : category;
+async function loadProfit(key) {
+  const rows = await getJSON("/api/profit?key=" + encodeURIComponent(key));
   historyChart = historyChart || echarts.init($("history-chart"));
-  historyChart.off("click");
+  if (!rows.length) {
+    historyChart.clear();
+    historyChart.setOption({ graphic: [{ type: "text", left: "center", top: "center", style: { text: "No expected-profit data yet — run a scan", fill: "#64748b", fontSize: 13 } }] });
+    return;
+  }
+  const single = key !== "__all__";
+  const catKeys = [...new Set(rows.map((r) => r.canonical_key))];
+  const colorOf = {};
+  catKeys.forEach((c, i) => (colorOf[c] = CAT_COLORS[i % CAT_COLORS.length]));
+
+  // One scatter series per category so the legend (catch-all view) is meaningful + colored.
+  const series = catKeys.map((c) => {
+    const cr = rows.filter((r) => r.canonical_key === c);
+    return {
+      name: cr[0].canonical_name || c,
+      type: "scatter",
+      symbolSize: (v) => Math.max(10, Math.min(36, 9 + Math.sqrt(Math.max(0, v[1])))),
+      itemStyle: { color: colorOf[c], opacity: 0.85 },
+      emphasis: { scale: 1.3 },
+      cursor: "pointer",
+      data: cr.map((r) => ({
+        value: [r.ts.replace("T", " "), Math.round(r.est_profit)],
+        name: r.canonical_name, url: r.url, price: r.price_usd, median: r.ebay_median, verdict: r.verdict,
+      })),
+    };
+  });
+
   historyChart.setOption(
     {
       tooltip: {
-        trigger: "item",
-        backgroundColor: "rgba(15,23,42,.95)", borderColor: "#334155", textStyle: { color: "#e2e8f0" },
+        trigger: "item", backgroundColor: "rgba(15,23,42,.95)", borderColor: "#334155", textStyle: { color: "#e2e8f0" },
         formatter: (p) => {
-          if (p.seriesName === "Opportunities") {
-            const d = p.data || {};
-            return `<b>${d.name || "Listing"}</b> <span style="color:${d.verdict === "deal" ? "#34d399" : "#fbbf24"}">${d.verdict}</span>`
-              + `<br/>Est. profit: <b>$${Number(p.value[1]).toLocaleString()}</b>`
-              + `<br/>Asking ${d.price === 0 ? "Free" : "$" + Number(d.price || 0).toLocaleString()}`
-              + (d.median ? ` · median $${Number(d.median).toLocaleString()} (${d.n})` : "")
-              + (d.url ? `<br/><span style="color:#818cf8">🔗 click to open listing</span>` : "");
-          }
-          return `<b>${label}</b> total<br/>Expected profit: <b>$${Number(p.value[1]).toLocaleString()}</b><br/><span style="color:#94a3b8">${p.value[0]}</span>`;
+          const d = p.data || {};
+          return `<b>${d.name || ""}</b><br/>Expected profit: <b style="color:#34d399">$${Number(p.value[1]).toLocaleString()}</b>`
+            + `<br/>Asking: ${d.price === 0 ? "Free" : "$" + Math.round(d.price).toLocaleString()} · median ${d.median ? "$" + Math.round(d.median).toLocaleString() : "—"}`
+            + `<br/><span style="color:#94a3b8">${p.value[0]} · ${d.verdict || ""}</span>`
+            + (d.url ? `<br/><span style="color:#818cf8">🔗 click to open</span>` : "");
         },
       },
-      legend: { data: ["Total", "Opportunities"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
-      grid: { left: 60, right: 20, top: 20, bottom: 45 },
+      legend: single ? { show: false } : { type: "scroll", bottom: 0, textStyle: { color: "#94a3b8", fontSize: 10 } },
+      grid: { left: 60, right: 20, top: 20, bottom: single ? 30 : 48 },
       xAxis: { type: "category", ...darkAxis() },
-      // Auto-scale Y to the selected category's range so small categories stay readable.
-      yAxis: { type: "value", scale: true, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
-      graphic: bubbles.length ? [] : [{ type: "text", left: "center", top: "center",
-        style: { text: "No opportunities in this category yet", fill: "#475569", fontSize: 13 } }],
-      series: [
-        { name: "Total", type: "line", data: line, smooth: true, symbol: "none",
-          lineStyle: { color: "#475569", width: 2, type: "dashed" }, z: 1 },
-        { name: "Opportunities", type: "scatter", data: bubbles, symbolSize: 14,
-          emphasis: { scale: 1.4 }, cursor: "pointer", z: 2 },
-      ],
+      yAxis: { type: "value", name: "expected $", nameTextStyle: { color: "#64748b" }, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
+      graphic: [],
+      series,
     },
-    { replaceMerge: ["graphic", "series"] }
+    { replaceMerge: ["series", "legend", "graphic"] }
   );
-  historyChart.on("click", (p) => { if (p.data && p.data.url) window.open(p.data.url, "_blank"); });
-}
-
-async function loadHistory(key) {
-  const rows = await getJSON(withScan("/api/history?key=" + encodeURIComponent(key)));
-  // Each FB-asking dot carries its product + listing URL so it can be hovered & clicked.
-  const asking = rows.filter((r) => r.source === "fb_asking").map((r) => ({
-    value: [r.ts.replace("T", " "), r.price_usd],
-    name: r.canonical_name || "",
-    url: r.url || "",
-    listingId: r.listing_id || "",
-  }));
-  const median = rows.filter((r) => r.source === "ebay_median").map((r) => [r.ts.replace("T", " "), r.price_usd]);
-  const hasMedian = median.length > 0;
-  historyChart = historyChart || echarts.init($("history-chart"));
-  historyChart.setOption(
-    {
-      tooltip: {
-        trigger: "item",
-        backgroundColor: "rgba(15,23,42,.95)",
-        borderColor: "#334155",
-        textStyle: { color: "#e2e8f0" },
-        formatter: (p) => {
-          if (p.seriesName === "FB asking") {
-            const d = p.data || {};
-            return `<b>${d.name || "Listing"}</b><br/>FB asking: <b>$${Number(p.value[1]).toLocaleString()}</b>`
-              + `<br/><span style="color:#94a3b8">${p.value[0]}</span>`
-              + (d.url ? `<br/><span style="color:#818cf8">🔗 click to open listing</span>` : "");
-          }
-          return `eBay median sold: <b>$${Number(p.value[1]).toLocaleString()}</b><br/><span style="color:#94a3b8">${p.value[0]}</span>`;
-        },
-      },
-      legend: { data: ["FB asking", "eBay median sold"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
-      grid: { left: 55, right: 20, top: 20, bottom: 50 },
-      xAxis: { type: "category", ...darkAxis() },
-      yAxis: { type: "value", ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
-      graphic: hasMedian ? [] : [{
-        type: "text", left: "center", top: 8,
-        style: { text: "No eBay sold comp for this product", fill: "#64748b", fontSize: 11 },
-      }],
-      series: [
-        { name: "FB asking", type: "scatter", symbolSize: 13, data: asking,
-          itemStyle: { color: "#818cf8" }, emphasis: { scale: 1.4 }, cursor: "pointer" },
-        { name: "eBay median sold", type: "line", data: median, smooth: true, symbolSize: 8,
-          lineStyle: { color: "#34d399", width: 3 }, itemStyle: { color: "#34d399" } },
-      ],
-    },
-    { replaceMerge: ["graphic", "series"] }
-  );
-  // Click a dot -> open that listing.
+  // Click a bubble -> open that listing.
   historyChart.off("click");
   historyChart.on("click", (p) => {
     if (p.data && p.data.url) window.open(p.data.url, "_blank");
@@ -261,12 +214,7 @@ function applyFilter() {
   let rows = allListings;
   if (currentFilter === "deal") rows = allListings.filter((r) => r.verdict === "deal");
   else if (currentFilter === "review") rows = allListings.filter((r) => r.verdict === "review");
-  else if (currentFilter === "free")
-    // Genuine free only: drop sales/mislists (false_free or real price in text), sold,
-    // dealer ads, and broken/damaged items.
-    rows = allListings.filter((r) =>
-      r.price_usd === 0 && !r.false_free && !r.price_in_description &&
-      !r.sold && !r.is_advertisement && !r.for_parts && !r.is_wanted_ad && !r.is_part);
+  else if (currentFilter === "free") rows = allListings.filter((r) => r.price_usd === 0 && !r.false_free);
   render(rows);
 }
 
@@ -293,7 +241,7 @@ async function refresh() {
   if (!has) return;
   applyFilter();
   loadVerdictChart();
-  await loadProducts();
+  await loadProfitCategories();
 }
 
 // ---------- clear history (double verification) ----------
@@ -339,7 +287,7 @@ $("scan-select").addEventListener("change", (e) => {
   currentScanId = e.target.selectedIndex === 0 ? null : Number(e.target.value);
   refresh();
 });
-$("product-select").addEventListener("change", (e) => loadProfitHistory(decodeURIComponent(e.target.value)));
+$("product-select").addEventListener("change", (e) => loadProfit(decodeURIComponent(e.target.value)));
 $("filter-tabs").addEventListener("click", (e) => {
   const f = e.target.getAttribute("data-f");
   if (!f) return;

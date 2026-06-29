@@ -59,19 +59,14 @@ def api_history(key: str) -> JSONResponse:
     return JSONResponse(db.get_history(key))
 
 
-@app.get("/api/categories")
-def api_categories(scan_id: int | None = None) -> JSONResponse:
-    return JSONResponse(db.get_categories(scan_id))
+@app.get("/api/profit/categories")
+def api_profit_categories() -> JSONResponse:
+    return JSONResponse(db.get_profit_categories())
 
 
-@app.get("/api/profit_history")
-def api_profit_history(category: str | None = None) -> JSONResponse:
-    return JSONResponse(db.get_profit_history(category))
-
-
-@app.get("/api/profit_points")
-def api_profit_points(category: str | None = None) -> JSONResponse:
-    return JSONResponse(db.get_profit_points(category))
+@app.get("/api/profit")
+def api_profit(key: str | None = None) -> JSONResponse:
+    return JSONResponse(db.get_profit_points(key))
 
 
 @app.get("/api/scan/status")

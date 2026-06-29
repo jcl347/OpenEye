@@ -70,8 +70,7 @@ CREATE TABLE IF NOT EXISTS listings (
     availability    TEXT,                        -- available | sold | pending | unavailable
     price_in_description REAL,                   -- real asking price found in the description, if any
     price_dropped_to_zero INTEGER DEFAULT 0,     -- was priced > 0 in a prior scan, now $0
-    sold            INTEGER DEFAULT 0,
-    category        TEXT                          -- broad product category for grouping
+    sold            INTEGER DEFAULT 0
 );
 
 -- Per-listing price memory across scans (survives the per-scan listings churn).
@@ -120,7 +119,6 @@ _LISTINGS_MIGRATIONS = {
     "price_in_description": "REAL",
     "price_dropped_to_zero": "INTEGER DEFAULT 0",
     "sold": "INTEGER DEFAULT 0",
-    "category": "TEXT",
 }
 
 
@@ -173,8 +171,8 @@ def ingest_report(report: dict[str, Any]) -> int:
                        detail_checked, defect_severity, defect_summary, defects_json, for_parts,
                        listing_intent, genuinely_free, false_free,
                        is_advertisement, availability, price_in_description,
-                       price_dropped_to_zero, sold, category)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       price_dropped_to_zero, sold)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     scan_id, ts, r.get("query"), r.get("listing_id"), r.get("title"),
                     r.get("canonical_key"), r.get("canonical_name"), r.get("brand"),
@@ -192,7 +190,6 @@ def ingest_report(report: dict[str, Any]) -> int:
                     int(bool(r.get("is_advertisement"))), r.get("availability"),
                     r.get("price_in_description"),
                     int(bool(r.get("price_dropped_to_zero"))), int(bool(r.get("sold"))),
-                    r.get("category"),
                 ),
             )
 
@@ -341,6 +338,20 @@ def get_products(scan_id: Optional[int] = None) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def delete_scan(scan_id: int) -> dict[str, Any]:
+    """Remove one scan: its listings, its price-history points, and the scan row."""
+    with connect() as conn:
+        row = conn.execute("SELECT ts FROM scans WHERE id=?", (scan_id,)).fetchone()
+        if not row:
+            return {"deleted": False, "reason": "no such scan"}
+        ts = row["ts"]
+        n = conn.execute("SELECT COUNT(*) c FROM listings WHERE scan_id=?", (scan_id,)).fetchone()["c"]
+        conn.execute("DELETE FROM listings WHERE scan_id=?", (scan_id,))
+        conn.execute("DELETE FROM price_history WHERE ts=?", (ts,))
+        conn.execute("DELETE FROM scans WHERE id=?", (scan_id,))
+        return {"deleted": True, "scan_id": scan_id, "ts": ts, "listings": n}
+
+
 def clear_all() -> dict[str, int]:
     """Wipe all stored scan history. Returns counts deleted. Irreversible."""
     with connect() as conn:
@@ -360,79 +371,41 @@ def clear_all() -> dict[str, int]:
     return counts
 
 
-def get_categories(scan_id: Optional[int] = None) -> list[str]:
-    """Distinct product categories present in a scan (for the profit-history selector)."""
-    with connect() as conn:
-        sid = _resolve_scan_id(conn, scan_id)
-        if sid is None:
-            return []
-        rows = conn.execute(
-            """SELECT category, COUNT(*) n FROM listings
-               WHERE scan_id=? AND category IS NOT NULL AND category != ''
-               GROUP BY category ORDER BY n DESC""",
-            (sid,),
-        ).fetchall()
-        return [r["category"] for r in rows]
-
-
-def get_profit_history(category: Optional[str] = None) -> list[dict[str, Any]]:
-    """Expected-profit-over-time: per scan, the total est. profit of DEALS, optionally
-    filtered to one category. 'All' (category=None) sums across categories."""
-    with connect() as conn:
-        sql = (
-            "SELECT s.ts AS ts, COALESCE(SUM(l.est_profit), 0) AS profit, COUNT(*) AS deals "
-            "FROM scans s LEFT JOIN listings l "
-            "  ON l.scan_id = s.id AND l.verdict = 'deal' AND l.est_profit IS NOT NULL "
-        )
-        params: list[Any] = []
-        if category and category != "All":
-            sql += "AND l.category = ? "
-            params.append(category)
-        sql += "GROUP BY s.id ORDER BY s.ts"
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
-
-
-def get_profit_points(category: Optional[str] = None) -> list[dict[str, Any]]:
-    """Individual opportunity bubbles for the chart: each surfaced deal/review listing
-    across all scans, with its expected profit, product, and URL (clickable). Optionally
-    filtered to one category ('All' = no filter)."""
-    with connect() as conn:
-        sql = (
-            "SELECT ts, est_profit, canonical_name, url, verdict, category, price_usd, "
-            "       ebay_median, ebay_count "
-            "FROM listings "
-            "WHERE verdict IN ('deal','review') AND est_profit IS NOT NULL "
-        )
-        params: list[Any] = []
-        if category and category != "All":
-            sql += "AND category = ? "
-            params.append(category)
-        sql += "ORDER BY ts"
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
-
-
-def backfill_categories(categorizer) -> int:
-    """Retroactively categorize listings with no category. `categorizer` takes a list of
-    product names and returns a list of categories. Returns the number of rows updated."""
+def get_profit_categories() -> list[dict[str, Any]]:
+    """Distinct product categories (across all scans) that have any expected-profit data,
+    for the Expected-Profit chart selector. Excludes unknown/parts/ads."""
     with connect() as conn:
         rows = conn.execute(
-            """SELECT DISTINCT canonical_name FROM listings
-               WHERE (category IS NULL OR category = '')
-                     AND canonical_name IS NOT NULL AND canonical_name != ''"""
+            """SELECT canonical_key, canonical_name,
+                      COUNT(*) n, MAX(est_profit) best_profit
+               FROM listings
+               WHERE est_profit IS NOT NULL AND canonical_key IS NOT NULL
+                     AND canonical_key NOT LIKE '%unknown%'
+                     AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
+                     AND for_parts=0 AND sold=0 AND false_free=0
+               GROUP BY canonical_key
+               ORDER BY best_profit DESC""",
         ).fetchall()
-        names = [r["canonical_name"] for r in rows]
-    if not names:
-        return 0
-    cats = categorizer(names)
-    updated = 0
+        return [dict(r) for r in rows]
+
+
+def get_profit_points(canonical_key: Optional[str] = None) -> list[dict[str, Any]]:
+    """Expected-profit points (one per valued listing) across ALL scans — historical
+    reporting. `canonical_key=None` or '__all__' = every category (catch-all)."""
     with connect() as conn:
-        for name, cat in zip(names, cats):
-            cur = conn.execute(
-                "UPDATE listings SET category=? WHERE canonical_name=? AND (category IS NULL OR category='')",
-                (cat, name),
-            )
-            updated += cur.rowcount
-    return updated
+        sql = """SELECT ts, canonical_key, canonical_name, est_profit, price_usd,
+                        ebay_median, url, title, verdict
+                 FROM listings
+                 WHERE est_profit IS NOT NULL AND canonical_key IS NOT NULL
+                       AND canonical_key NOT LIKE '%unknown%'
+                       AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
+                       AND for_parts=0 AND sold=0 AND false_free=0"""
+        params: list[Any] = []
+        if canonical_key and canonical_key != "__all__":
+            sql += " AND canonical_key=?"
+            params.append(canonical_key)
+        sql += " ORDER BY ts"
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def get_history(canonical_key: str) -> list[dict[str, Any]]:
