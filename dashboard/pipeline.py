@@ -175,13 +175,19 @@ def main() -> None:
     print(f"Targets: {len(items)} watchlist + "
           f"{len(targets) - len(items)} discovery = {len(targets)} queries (paced).")
 
-    # Let Claude optimize each simple watchlist term into an effective FB search string.
+    # Let Claude optimize each term: one for the priced search, one tuned for FREE giveaways.
     search_terms = normalize.optimize_queries([t[0] for t in targets])
-    targets = [(t[0], t[1], t[2], st) for t, st in zip(targets, search_terms)]
+    free_terms = normalize.optimize_free_queries([t[0] for t in targets])
+    targets = [(t[0], t[1], t[2], st, ft)
+               for t, st, ft in zip(targets, search_terms, free_terms)]
     changed = [(t[0], t[3]) for t in targets if t[3] != t[0]]
     if changed:
         print("Optimized searches: " + ", ".join(f"{a!r}->{b!r}" for a, b in changed[:8])
               + (" ..." if len(changed) > 8 else ""), flush=True)
+    fchanged = [(t[0], t[4]) for t in targets if t[4] != t[0]]
+    if fchanged:
+        print("Free-query tuning: " + ", ".join(f"{a!r}->{b!r}" for a, b in fchanged[:8])
+              + (" ..." if len(fchanged) > 8 else ""), flush=True)
 
     now = dt.datetime.now()
     ts = now.strftime("%Y-%m-%dT%H:%M:%S")
@@ -195,12 +201,12 @@ def main() -> None:
     fb_workers = 1 if os.environ.get("FB_PROFILE_DIR") else FB_CONCURRENCY
 
     def scan_query(target: tuple) -> list[dict]:
-        qi, (query, eff, is_disc, search_term) = target
+        qi, (query, eff, is_disc, search_term, free_term) = target
         tag = "disc" if is_disc else "watch"
         _pace(PACE_FB)   # jittered start so workers don't fire in lockstep
-        # priced + free sweeps, serially within the query (parallelism is across queries).
+        # priced search + FREE sweep (its own LLM-tuned term), serial within the query.
         priced = run_fb(search_term, location_id, eff["days"], None, SCROLL_ROUNDS)[:MAX_LISTINGS_PER_ITEM]
-        free = run_fb(search_term, location_id, FREE_SWEEP_DAYS, 0, SCROLL_ROUNDS)[:MAX_FREE_PER_ITEM]
+        free = run_fb(free_term, location_id, FREE_SWEEP_DAYS, 0, SCROLL_ROUNDS)[:MAX_FREE_PER_ITEM]
         listings = _merge_dedup(priced, free)
         if not listings:
             print(f"[scan] ({tag}) {query}: no listings", flush=True)

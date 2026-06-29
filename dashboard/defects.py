@@ -50,8 +50,11 @@ _DEFECT_TOOL = {
             "genuinely_free": {
                 "type": "boolean",
                 "description": (
-                    "true ONLY if the item is really being given away at no cost. false if the $0/Free "
-                    "price is a trade, a sale, an ISO, a placeholder, or the text says it is not actually free."
+                    "true ONLY if the item is truly given away at no cost and NO strings. false if the "
+                    "$0/Free price is a trade, a sale, an ISO/'looking for'/'seeking' request, a "
+                    "placeholder, OR the description requires a PURCHASE to get it free ('free with "
+                    "purchase', 'buy one of my other items and this is free', 'free when you buy X') — any "
+                    "implied cost or purchase means false."
                 ),
             },
             "availability": {

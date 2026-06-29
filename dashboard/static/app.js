@@ -14,7 +14,7 @@ let currentScanId = null;   // null = latest scan; set to view a historical scan
 // as a trade/sale/mislist/dealer-ad/broken/sold.
 const isGenuineFree = (r) =>
   r.price_usd === 0 && r.genuinely_free &&
-  !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement;
+  !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement && !r.is_wanted_ad;
 
 // Comp-confidence color for the (n) sample-size chip: green=solid, amber=thin, red=very thin.
 const confColor = (c) => (c == null ? "text-slate-500" : c >= 0.66 ? "text-emerald-400" : c >= 0.33 ? "text-amber-400" : "text-rose-400");
