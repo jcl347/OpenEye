@@ -301,6 +301,16 @@ def main() -> None:
                 r["comp_method"] = filt.get("method")
             print(f"  {group[0]} [{group[1]}] -> ${median} (n={count}, {filt.get('method')})", flush=True)
 
+    # ---- 3b. LLM-vet every FREE listing (one batched, title-based call — no detail fetches)
+    #          so the whole Free section is genuine. The description reader (4b) refines the
+    #          candidates it reads in depth. ----
+    free_rows = [r for r in rows if r["price_usd"] == 0]
+    if free_rows:
+        verdicts = normalize.vet_free_titles([r.get("title", "") for r in free_rows])
+        for r, ok in zip(free_rows, verdicts):
+            r["genuinely_free"] = int(bool(ok))
+        print(f"[free] LLM-vetted {len(free_rows)} free listings — {sum(verdicts)} genuine", flush=True)
+
     # ---- 4. Score ----
     for r in rows:
         eff = eff_by_key.get(r["canonical_key"], scoring.effective_thresholds({}, defaults))

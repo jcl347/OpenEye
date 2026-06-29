@@ -9,12 +9,12 @@ let historyChart, verdictChart;
 let allListings = [];
 let currentScanId = null;   // null = latest scan; set to view a historical scan
 
-// Genuine free = $0, not a trade/sale/mislist/dealer-ad, not broken/sold, AND — when the LLM
-// actually read the description — it confirmed a real giveaway (detail_checked but not
-// genuinely_free means the LLM looked and it was NOT specifically free → exclude).
+// Genuine free = $0, the LLM judged it a real giveaway (genuinely_free — set for EVERY $0
+// item now: title-based by the normalizer, or description-based when read), and not flagged
+// as a trade/sale/mislist/dealer-ad/broken/sold.
 const isGenuineFree = (r) =>
-  r.price_usd === 0 && !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement &&
-  !(r.detail_checked && !r.genuinely_free);
+  r.price_usd === 0 && r.genuinely_free &&
+  !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement;
 
 // Comp-confidence color for the (n) sample-size chip: green=solid, amber=thin, red=very thin.
 const confColor = (c) => (c == null ? "text-slate-500" : c >= 0.66 ? "text-emerald-400" : c >= 0.33 ? "text-amber-400" : "text-rose-400");
