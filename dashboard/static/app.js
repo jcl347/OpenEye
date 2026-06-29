@@ -126,33 +126,29 @@ async function loadProfit(key) {
     return;
   }
   const single = key !== "__all__";
-  const catKeys = [...new Set(rows.map((r) => r.canonical_key))];
-  const colorOf = {};
-  catKeys.forEach((c, i) => (colorOf[c] = CAT_COLORS[i % CAT_COLORS.length]));
 
-  // One scatter series per category so the legend (catch-all view) is meaningful + colored.
-  const series = catKeys.map((c) => {
-    const cr = rows.filter((r) => r.canonical_key === c);
-    return {
-      name: cr[0].canonical_name || c,
-      type: "scatter",
-      symbolSize: (v) => Math.max(10, Math.min(36, 9 + Math.sqrt(Math.max(0, v[1])))),
-      itemStyle: { color: colorOf[c], opacity: 0.85 },
-      emphasis: { scale: 1.3 },
-      cursor: "pointer",
-      data: cr.map((r) => ({
-        value: [r.ts.replace("T", " "), Math.round(r.est_profit)],
-        name: r.canonical_name, url: r.url, price: r.price_usd, median: r.ebay_median, verdict: r.verdict,
-      })),
-    };
-  });
+  // Single scatter series, one color (no per-category color coding) — each bubble is an
+  // opportunity, clickable to open the listing.
+  const series = [{
+    name: "opportunities",
+    type: "scatter",
+    symbolSize: (v) => Math.max(10, Math.min(36, 9 + Math.sqrt(Math.max(0, v[1])))),
+    itemStyle: { color: "#34d399", opacity: 0.7 },
+    emphasis: { scale: 1.3 },
+    cursor: "pointer",
+    data: rows.map((r) => ({
+      value: [r.ts.replace("T", " "), Math.round(r.est_profit)],
+      name: r.canonical_name, url: r.url, price: r.price_usd, median: r.ebay_median, verdict: r.verdict,
+    })),
+  }];
 
-  // Trend line: average expected profit per scan over time (smoothed, never negative).
+  // ONE trend line: average expected profit per scan over time. Straight segments (not
+  // smoothed) so the line never overshoots into an apparent second line.
   const byTs = {};
   rows.forEach((r) => { const t = r.ts.replace("T", " "); (byTs[t] = byTs[t] || []).push(r.est_profit); });
   const trend = Object.keys(byTs).sort().map((t) => [t, Math.round(byTs[t].reduce((a, b) => a + b, 0) / byTs[t].length)]);
   series.push({
-    name: "avg expected profit (trend)", type: "line", data: trend, smooth: true,
+    name: "avg expected profit (trend)", type: "line", data: trend, smooth: false,
     symbol: "circle", symbolSize: 7, z: 10,
     lineStyle: { color: "#f8fafc", width: 3 }, itemStyle: { color: "#f8fafc" },
   });
@@ -169,8 +165,8 @@ async function loadProfit(key) {
             + (d.url ? `<br/><span style="color:#818cf8">🔗 click to open</span>` : "");
         },
       },
-      legend: single ? { show: false } : { type: "scroll", bottom: 0, textStyle: { color: "#94a3b8", fontSize: 10 } },
-      grid: { left: 60, right: 20, top: 20, bottom: single ? 30 : 48 },
+      legend: { data: ["avg expected profit (trend)"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
+      grid: { left: 60, right: 20, top: 20, bottom: 40 },
       xAxis: { type: "category", ...darkAxis() },
       yAxis: { type: "value", name: "price ($)", min: 0, nameTextStyle: { color: "#64748b" }, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
       graphic: [],

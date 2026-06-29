@@ -397,37 +397,31 @@ def clear_all() -> dict[str, int]:
     return counts
 
 
-def get_profit_categories() -> list[dict[str, Any]]:
-    """Distinct product categories (across all scans) that have any expected-profit data,
-    for the Expected-Profit chart selector. Excludes unknown/parts/ads."""
-    with connect() as conn:
-        rows = conn.execute(
-            """SELECT canonical_key, canonical_name,
-                      COUNT(*) n, MAX(est_profit) best_profit
-               FROM listings
-               WHERE est_profit IS NOT NULL AND canonical_key IS NOT NULL
+_PROFIT_WHERE = """est_profit IS NOT NULL AND est_profit > 0 AND canonical_key IS NOT NULL
                      AND canonical_key NOT LIKE '%unknown%'
                      AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
-                     AND for_parts=0 AND sold=0 AND false_free=0
-                     AND est_profit > 0
-               GROUP BY canonical_key
-               ORDER BY best_profit DESC""",
+                     AND for_parts=0 AND sold=0 AND false_free=0"""
+
+
+def get_profit_categories() -> list[dict[str, Any]]:
+    """Product categories across ALL scans (historical) with expected-profit data."""
+    with connect() as conn:
+        rows = conn.execute(
+            f"""SELECT canonical_key, canonical_name, COUNT(*) n, MAX(est_profit) best_profit
+                FROM listings WHERE {_PROFIT_WHERE}
+                GROUP BY canonical_key
+                ORDER BY best_profit DESC""",
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_profit_points(canonical_key: Optional[str] = None) -> list[dict[str, Any]]:
-    """Expected-profit points (one per valued listing) across ALL scans — historical
-    reporting. `canonical_key=None` or '__all__' = every category (catch-all)."""
+    """Expected-profit points (one per valued listing) across ALL scans — historical reporting.
+    `canonical_key=None` or '__all__' = every category (catch-all)."""
     with connect() as conn:
-        sql = """SELECT ts, canonical_key, canonical_name, est_profit, price_usd,
-                        ebay_median, url, title, verdict
-                 FROM listings
-                 WHERE est_profit IS NOT NULL AND canonical_key IS NOT NULL
-                       AND canonical_key NOT LIKE '%unknown%'
-                       AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
-                       AND for_parts=0 AND sold=0 AND false_free=0
-                       AND est_profit > 0"""
+        sql = (f"""SELECT ts, canonical_key, canonical_name, est_profit, price_usd, ebay_median,
+                          url, title, verdict
+                   FROM listings WHERE {_PROFIT_WHERE}""")
         params: list[Any] = []
         if canonical_key and canonical_key != "__all__":
             sql += " AND canonical_key=?"
