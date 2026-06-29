@@ -9,9 +9,12 @@ let historyChart, verdictChart;
 let allListings = [];
 let currentScanId = null;   // null = latest scan; set to view a historical scan
 
-// Genuine free = $0 and not flagged as a trade/sale/mislist/dealer-ad, not broken, not sold.
+// Genuine free = $0, not a trade/sale/mislist/dealer-ad, not broken/sold, AND — when the LLM
+// actually read the description — it confirmed a real giveaway (detail_checked but not
+// genuinely_free means the LLM looked and it was NOT specifically free → exclude).
 const isGenuineFree = (r) =>
-  r.price_usd === 0 && !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement;
+  r.price_usd === 0 && !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement &&
+  !(r.detail_checked && !r.genuinely_free);
 
 // Comp-confidence color for the (n) sample-size chip: green=solid, amber=thin, red=very thin.
 const confColor = (c) => (c == null ? "text-slate-500" : c >= 0.66 ? "text-emerald-400" : c >= 0.33 ? "text-amber-400" : "text-rose-400");
@@ -166,9 +169,9 @@ async function loadProfit(key) {
         },
       },
       legend: { data: ["avg expected profit (trend)"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
-      grid: { left: 60, right: 20, top: 20, bottom: 40 },
+      grid: { left: 78, right: 20, top: 30, bottom: 40, containLabel: false },
       xAxis: { type: "category", ...darkAxis() },
-      yAxis: { type: "value", name: "price ($)", min: 0, nameTextStyle: { color: "#64748b" }, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
+      yAxis: { type: "value", name: "price ($)", min: 0, nameGap: 16, nameTextStyle: { color: "#64748b", align: "left" }, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: (v) => "$" + v.toLocaleString() } },
       graphic: [],
       series,
     },

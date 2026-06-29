@@ -402,14 +402,23 @@ _PROFIT_WHERE = """est_profit IS NOT NULL AND est_profit > 0 AND canonical_key I
                      AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
                      AND for_parts=0 AND sold=0 AND false_free=0"""
 
+# A slightly more GENERAL chart category: brand + model (drops the variant like storage/chip/
+# size), so 'iPhone 16 Pro 256GB' and '...512GB' aggregate to 'Apple iPhone 16 Pro'. Falls
+# back to the specific canonical_name when no model was extracted. Chart display only — the
+# per-listing valuation still uses the exact product.
+_GEN_NAME_SQL = ("CASE WHEN TRIM(COALESCE(model,'')) <> '' "
+                 "THEN TRIM(COALESCE(brand,'') || ' ' || model) ELSE canonical_name END")
+_GEN_KEY_SQL = f"LOWER({_GEN_NAME_SQL})"
+
 
 def get_profit_categories() -> list[dict[str, Any]]:
     """Product categories across ALL scans (historical) with expected-profit data."""
     with connect() as conn:
         rows = conn.execute(
-            f"""SELECT canonical_key, canonical_name, COUNT(*) n, MAX(est_profit) best_profit
+            f"""SELECT {_GEN_KEY_SQL} canonical_key, {_GEN_NAME_SQL} canonical_name,
+                       COUNT(*) n, MAX(est_profit) best_profit
                 FROM listings WHERE {_PROFIT_WHERE}
-                GROUP BY canonical_key
+                GROUP BY {_GEN_KEY_SQL}
                 ORDER BY best_profit DESC""",
         ).fetchall()
         return [dict(r) for r in rows]
@@ -419,12 +428,12 @@ def get_profit_points(canonical_key: Optional[str] = None) -> list[dict[str, Any
     """Expected-profit points (one per valued listing) across ALL scans — historical reporting.
     `canonical_key=None` or '__all__' = every category (catch-all)."""
     with connect() as conn:
-        sql = (f"""SELECT ts, canonical_key, canonical_name, est_profit, price_usd, ebay_median,
-                          url, title, verdict
+        sql = (f"""SELECT ts, {_GEN_KEY_SQL} canonical_key, {_GEN_NAME_SQL} canonical_name,
+                          est_profit, price_usd, ebay_median, url, title, verdict
                    FROM listings WHERE {_PROFIT_WHERE}""")
         params: list[Any] = []
         if canonical_key and canonical_key != "__all__":
-            sql += " AND canonical_key=?"
+            sql += f" AND {_GEN_KEY_SQL}=?"
             params.append(canonical_key)
         sql += " ORDER BY ts"
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
