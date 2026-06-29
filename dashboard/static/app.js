@@ -102,37 +102,56 @@ async function loadProducts() {
 }
 
 async function loadProfitHistory(category) {
-  const rows = await getJSON("/api/profit_history" + (category && category !== "All" ? "?category=" + encodeURIComponent(category) : ""));
-  const pts = rows.map((r) => ({ value: [r.ts.replace("T", " "), Math.round(r.profit)], deals: r.deals }));
-  historyChart = historyChart || echarts.init($("history-chart"));
+  const qs = category && category !== "All" ? "?category=" + encodeURIComponent(category) : "";
+  // Aggregate trend line + individual clickable item bubbles.
+  const [trend, points] = await Promise.all([
+    getJSON("/api/profit_history" + qs),
+    getJSON("/api/profit_points" + qs),
+  ]);
+  const line = trend.map((r) => [r.ts.replace("T", " "), Math.round(r.profit)]);
+  const bubbles = points.map((p) => ({
+    value: [p.ts.replace("T", " "), Math.round(p.est_profit)],
+    name: p.canonical_name || "", url: p.url || "", verdict: p.verdict,
+    price: p.price_usd, median: p.ebay_median, n: p.ebay_count,
+    itemStyle: { color: p.verdict === "deal" ? "#34d399" : "#fbbf24" },
+  }));
   const label = category === "All" ? "All categories" : category;
+  historyChart = historyChart || echarts.init($("history-chart"));
   historyChart.off("click");
   historyChart.setOption(
     {
       tooltip: {
-        trigger: "axis",
+        trigger: "item",
         backgroundColor: "rgba(15,23,42,.95)", borderColor: "#334155", textStyle: { color: "#e2e8f0" },
-        formatter: (ps) => {
-          const p = ps[0];
-          return `<b>${label}</b><br/>Expected profit: <b>$${Number(p.value[1]).toLocaleString()}</b>`
-            + `<br/>${(p.data && p.data.deals) || 0} deal(s)<br/><span style="color:#94a3b8">${p.value[0]}</span>`;
+        formatter: (p) => {
+          if (p.seriesName === "Opportunities") {
+            const d = p.data || {};
+            return `<b>${d.name || "Listing"}</b> <span style="color:${d.verdict === "deal" ? "#34d399" : "#fbbf24"}">${d.verdict}</span>`
+              + `<br/>Est. profit: <b>$${Number(p.value[1]).toLocaleString()}</b>`
+              + `<br/>Asking ${d.price === 0 ? "Free" : "$" + Number(d.price || 0).toLocaleString()}`
+              + (d.median ? ` · median $${Number(d.median).toLocaleString()} (${d.n})` : "")
+              + (d.url ? `<br/><span style="color:#818cf8">🔗 click to open listing</span>` : "");
+          }
+          return `<b>${label}</b> total<br/>Expected profit: <b>$${Number(p.value[1]).toLocaleString()}</b><br/><span style="color:#94a3b8">${p.value[0]}</span>`;
         },
       },
-      legend: { show: false },
-      grid: { left: 60, right: 20, top: 20, bottom: 40 },
+      legend: { data: ["Total", "Opportunities"], bottom: 0, textStyle: { color: "#94a3b8", fontSize: 11 } },
+      grid: { left: 60, right: 20, top: 20, bottom: 45 },
       xAxis: { type: "category", ...darkAxis() },
-      // Auto-scale Y to the selected category's range so small categories are readable.
+      // Auto-scale Y to the selected category's range so small categories stay readable.
       yAxis: { type: "value", scale: true, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
-      graphic: pts.length ? [] : [{ type: "text", left: "center", top: "center",
-        style: { text: "No profit history yet — run more scans", fill: "#475569", fontSize: 13 } }],
-      series: [{
-        name: "Expected profit", type: "line", data: pts, smooth: true, symbolSize: 9,
-        areaStyle: { color: "rgba(52,211,153,.12)" },
-        lineStyle: { color: "#34d399", width: 3 }, itemStyle: { color: "#34d399" },
-      }],
+      graphic: bubbles.length ? [] : [{ type: "text", left: "center", top: "center",
+        style: { text: "No opportunities in this category yet", fill: "#475569", fontSize: 13 } }],
+      series: [
+        { name: "Total", type: "line", data: line, smooth: true, symbol: "none",
+          lineStyle: { color: "#475569", width: 2, type: "dashed" }, z: 1 },
+        { name: "Opportunities", type: "scatter", data: bubbles, symbolSize: 14,
+          emphasis: { scale: 1.4 }, cursor: "pointer", z: 2 },
+      ],
     },
     { replaceMerge: ["graphic", "series"] }
   );
+  historyChart.on("click", (p) => { if (p.data && p.data.url) window.open(p.data.url, "_blank"); });
 }
 
 async function loadHistory(key) {

@@ -392,6 +392,25 @@ def get_profit_history(category: Optional[str] = None) -> list[dict[str, Any]]:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def get_profit_points(category: Optional[str] = None) -> list[dict[str, Any]]:
+    """Individual opportunity bubbles for the chart: each surfaced deal/review listing
+    across all scans, with its expected profit, product, and URL (clickable). Optionally
+    filtered to one category ('All' = no filter)."""
+    with connect() as conn:
+        sql = (
+            "SELECT ts, est_profit, canonical_name, url, verdict, category, price_usd, "
+            "       ebay_median, ebay_count "
+            "FROM listings "
+            "WHERE verdict IN ('deal','review') AND est_profit IS NOT NULL "
+        )
+        params: list[Any] = []
+        if category and category != "All":
+            sql += "AND category = ? "
+            params.append(category)
+        sql += "ORDER BY ts"
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def backfill_categories(categorizer) -> int:
     """Retroactively categorize listings with no category. `categorizer` takes a list of
     product names and returns a list of categories. Returns the number of rows updated."""
