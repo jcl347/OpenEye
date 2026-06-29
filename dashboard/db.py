@@ -285,10 +285,21 @@ def get_summary(scan_id: Optional[int] = None) -> dict[str, Any]:
             (sid,),
         ).fetchone()["p"]
         total_scans = conn.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
+        # FB-Marketplace-vs-eBay comparison across this scan's deals.
+        cmp = conn.execute(
+            """SELECT AVG(price_usd) fb, AVG(ebay_median) ebay
+               FROM listings WHERE scan_id=? AND verdict='deal' AND ebay_median IS NOT NULL""",
+            (sid,),
+        ).fetchone()
+        fb_avg, ebay_avg = cmp["fb"], cmp["ebay"]
+        discount = round(100 * (1 - fb_avg / ebay_avg)) if (fb_avg and ebay_avg) else None
         return {
             "has_data": True,
             "scan_id": sid,
             "is_latest": sid == _latest_scan_id(conn),
+            "fb_avg_ask": round(fb_avg, 2) if fb_avg is not None else None,
+            "ebay_avg_sold": round(ebay_avg, 2) if ebay_avg is not None else None,
+            "fb_vs_ebay_discount_pct": discount,
             "last_scan_ts": scan["ts"],
             "location_id": scan["location_id"],
             "watchlist_size": scan["watchlist_size"],
@@ -383,6 +394,7 @@ def get_profit_categories() -> list[dict[str, Any]]:
                      AND canonical_key NOT LIKE '%unknown%'
                      AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
                      AND for_parts=0 AND sold=0 AND false_free=0
+                     AND est_profit > 0
                GROUP BY canonical_key
                ORDER BY best_profit DESC""",
         ).fetchall()
@@ -399,7 +411,8 @@ def get_profit_points(canonical_key: Optional[str] = None) -> list[dict[str, Any
                  WHERE est_profit IS NOT NULL AND canonical_key IS NOT NULL
                        AND canonical_key NOT LIKE '%unknown%'
                        AND is_part=0 AND is_wanted_ad=0 AND is_advertisement=0
-                       AND for_parts=0 AND sold=0 AND false_free=0"""
+                       AND for_parts=0 AND sold=0 AND false_free=0
+                       AND est_profit > 0"""
         params: list[Any] = []
         if canonical_key and canonical_key != "__all__":
             sql += " AND canonical_key=?"

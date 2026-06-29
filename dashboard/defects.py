@@ -58,10 +58,12 @@ _DEFECT_TOOL = {
                 "type": "string",
                 "enum": ["available", "sold", "pending", "unavailable"],
                 "description": (
-                    "Is it still available? Detect if the listing says it is already SOLD — including "
-                    "misspellings/variants (sold, sld, sould, solded, 'soldd', 'spoken for', 'gone', "
-                    "'no longer available', 'not available'), PENDING (pending pickup/sale, on hold, "
-                    "'pending p/u'), or otherwise UNAVAILABLE. Use 'available' only if nothing says otherwise."
+                    "DEFAULT TO 'available'. Only mark 'sold' when the text EXPLICITLY says it sold "
+                    "(sold, sld, sould, solded, 'spoken for', 'no longer available') or shows a struck-"
+                    "through original price now reduced to $0. Mark 'pending' only when it explicitly "
+                    "says pending / on-hold. Do NOT infer unavailability from vague wording, missing "
+                    "details, an odd title, or absence of info — when in doubt, 'available'. Reserve "
+                    "'unavailable' for an explicit statement that it's gone/withdrawn."
                 ),
             },
             "price_in_description": {

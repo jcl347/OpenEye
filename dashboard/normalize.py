@@ -59,8 +59,9 @@ _EXTRACT_TOOL = {
                         "variant": {
                             "type": "string",
                             "description": (
-                                "Distinguishing spec NOT already in model: storage/size/edition/color "
-                                "that changes resale value, e.g. '24GB', '1TB', '256GB', 'Size B'. '' if none."
+                                "Only a spec that materially changes resale value and isn't in model: "
+                                "storage/capacity/screen-size/edition, e.g. '256GB', '1TB', '65 inch', "
+                                "'Disc', 'Size B'. Do NOT put color, accessories, or condition here. '' if none."
                             ),
                         },
                         "condition": {
@@ -81,7 +82,17 @@ _EXTRACT_TOOL = {
                         },
                         "canonical_name": {
                             "type": "string",
-                            "description": "Clean human-readable product name, e.g. 'Sony A7 IV (body)'.",
+                            "description": (
+                                "A clean PRODUCT CATEGORY name = brand + model + value-defining spec only. "
+                                "EXCLUDE: color, bundled accessories ('with stands', 'with case', 'body + "
+                                "lens kit'), condition words, marketing adjectives ('All-Weather'), "
+                                "parenthetical qualifiers, and internal SKU/serial numbers. So 'iPhone 16 "
+                                "Pro 256GB' (NOT 'iPhone 16 Pro (256GB, Black Titanium)'); 'LG 55 OLED TV' "
+                                "(NOT 'LG 55-Inch OLED TV with stands'); 'EcoFlow DELTA 2' (NOT 'EcoFlow "
+                                "DELTA F7168'). If the model is genuinely unknown, use the plain category "
+                                "(e.g. 'iPhone', 'Bluetooth speaker') — never invent qualifiers like "
+                                "'(found)' or '(unreleased model)'."
+                            ),
                         },
                         "ebay_query": {
                             "type": "string",
@@ -101,10 +112,12 @@ _EXTRACT_TOOL = {
 }
 
 _SYSTEM = (
-    "You normalize messy online-marketplace listing titles into structured product "
-    "identities for price comparison. Capture the EXACT model so distinct products form "
-    "distinct categories — never merge different models (Sony A7 IV, A7C II, and A7R V are "
-    "separate; RTX 4090 ≠ RTX 4080; iPhone 15 Pro ≠ 15 Pro Max). Be precise about condition, and "
+    "You normalize messy online-marketplace listing titles into clean product CATEGORIES for "
+    "price comparison. Find the right altitude: capture the EXACT model so distinct products "
+    "stay distinct (Sony A7 IV, A7C II, A7R V are separate; RTX 4090 ≠ RTX 4080; iPhone 15 Pro ≠ "
+    "15 Pro Max), but DROP listing noise that fragments categories — color, accessories ('with "
+    "stands'), marketing words, parenthetical qualifiers, and SKU numbers. Two listings of the "
+    "same model in different colors must get the SAME canonical_name. Be precise about condition, and "
     "flag parts/accessories, want-to-buy/ISO ads, and dealer/storefront advertisements "
     "(e.g. 'selling PCs for all budgets', 'I build and sell', 'message me for pricing') so "
     "they can be excluded from resale comps. Reason about the meaning of the text — do not "

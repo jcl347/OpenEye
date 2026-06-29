@@ -9,6 +9,10 @@ let historyChart, verdictChart;
 let allListings = [];
 let currentScanId = null;   // null = latest scan; set to view a historical scan
 
+// Genuine free = $0 and not flagged as a trade/sale/mislist/dealer-ad, not broken, not sold.
+const isGenuineFree = (r) =>
+  r.price_usd === 0 && !r.false_free && !r.for_parts && !r.sold && !r.is_advertisement;
+
 const scanParam = () => (currentScanId ? "?scan_id=" + currentScanId : "");
 const withScan = (url) => url + (currentScanId ? (url.includes("?") ? "&" : "?") + "scan_id=" + currentScanId : "");
 
@@ -57,8 +61,16 @@ async function loadSummary() {
   $("empty").classList.add("hidden");
   $("hist-indicator").classList.toggle("hidden", !!s.is_latest);
   $("last-scan").textContent = (s.is_latest ? "Last scan: " : "Scan: ") + (s.last_scan_ts || "—").replace("T", " ");
-  // Genuine free = $0 AND not flagged as false-free (trade / sale / mislist / dealer ad).
-  const freeFinds = allListings.filter((r) => r.price_usd === 0 && !r.false_free).length;
+  // FB Marketplace vs eBay comparison band.
+  if (s.fb_avg_ask != null && s.ebay_avg_sold != null) {
+    $("fb-ebay").classList.remove("hidden");
+    $("cmp-fb").textContent = fmtUsd(s.fb_avg_ask);
+    $("cmp-ebay").textContent = fmtUsd(s.ebay_avg_sold);
+    $("cmp-disc").textContent = (s.fb_vs_ebay_discount_pct != null ? s.fb_vs_ebay_discount_pct + "%" : "—");
+  } else {
+    $("fb-ebay").classList.add("hidden");
+  }
+  const freeFinds = allListings.filter(isGenuineFree).length;
   $("kpis").innerHTML = [
     kpiCard("Deals found", s.deals_count, "emerald", "buy-worthy margin"),
     kpiCard("Potential profit", fmtUsd(s.total_potential_profit), "emerald", "sum of est. profit"),
@@ -132,6 +144,16 @@ async function loadProfit(key) {
     };
   });
 
+  // Trend line: average expected profit per scan over time (smoothed, never negative).
+  const byTs = {};
+  rows.forEach((r) => { const t = r.ts.replace("T", " "); (byTs[t] = byTs[t] || []).push(r.est_profit); });
+  const trend = Object.keys(byTs).sort().map((t) => [t, Math.round(byTs[t].reduce((a, b) => a + b, 0) / byTs[t].length)]);
+  series.push({
+    name: "avg expected profit (trend)", type: "line", data: trend, smooth: true,
+    symbol: "circle", symbolSize: 7, z: 10,
+    lineStyle: { color: "#f8fafc", width: 3 }, itemStyle: { color: "#f8fafc" },
+  });
+
   historyChart.setOption(
     {
       tooltip: {
@@ -147,7 +169,7 @@ async function loadProfit(key) {
       legend: single ? { show: false } : { type: "scroll", bottom: 0, textStyle: { color: "#94a3b8", fontSize: 10 } },
       grid: { left: 60, right: 20, top: 20, bottom: single ? 30 : 48 },
       xAxis: { type: "category", ...darkAxis() },
-      yAxis: { type: "value", name: "expected $", nameTextStyle: { color: "#64748b" }, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
+      yAxis: { type: "value", name: "price ($)", min: 0, nameTextStyle: { color: "#64748b" }, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
       graphic: [],
       series,
     },
@@ -214,7 +236,7 @@ function applyFilter() {
   let rows = allListings;
   if (currentFilter === "deal") rows = allListings.filter((r) => r.verdict === "deal");
   else if (currentFilter === "review") rows = allListings.filter((r) => r.verdict === "review");
-  else if (currentFilter === "free") rows = allListings.filter((r) => r.price_usd === 0 && !r.false_free);
+  else if (currentFilter === "free") rows = allListings.filter(isGenuineFree);
   render(rows);
 }
 
