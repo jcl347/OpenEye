@@ -42,7 +42,7 @@ MAX_FREE_PER_ITEM = 8               # extra slots for the FREE sweep (high-value
 FREE_SWEEP_DAYS = 30               # widen recency for free items (rarer)
 SCROLL_ROUNDS = 0                  # logged-out scroll is walled; 0 until a login session exists
 MAX_COMPS = 65                      # cap eBay lookups per scan (time/cost); excess -> low-confidence
-DEFECT_CHECK_CAP = 24              # cap description reads per scan (deals + free vetting)
+DEFECT_CHECK_CAP = 32              # cap description reads per scan (deals + free vetting)
 EBAY_CONDITIONS = {"new", "used", "open box", "refurbished"}
 
 # --- Concurrency: parallelism speeds + effectively widens the scan. eBay tolerates it
@@ -344,6 +344,7 @@ def main() -> None:
             r["defects_json"] = json.dumps({
                 "defects": a["defects"], "risk_flags": a["risk_flags"],
                 "refurb_needed": a["refurb_needed"], "for_parts": a["for_parts_or_broken"],
+                "damaged": a.get("damaged_needs_repair", False),
                 "listing_intent": a["listing_intent"], "availability": a["availability"],
                 "price_in_description": a.get("price_in_description") or None,
             })
@@ -357,10 +358,11 @@ def main() -> None:
                 print(f"  [{a['availability']}] {(r['canonical_name'] or '')[:30]} -> skip", flush=True)
                 continue
 
-            # DEFECTIVE / for-parts / broken -> remove (skip), not Review.
-            if a["for_parts_or_broken"]:
+            # BROKEN / DAMAGED / needs-repair (incl. fixable, even with a backstory) -> remove.
+            if a["for_parts_or_broken"] or a.get("damaged_needs_repair"):
                 r["verdict"] = "skip"
-                print(f"  [defective] {(r['canonical_name'] or '')[:30]} -> removed", flush=True)
+                r["for_parts"] = 1
+                print(f"  [damaged] {(r['canonical_name'] or '')[:30]} -> removed", flush=True)
                 continue
 
             # Dealer/storefront ADVERTISEMENT (any price) -> skip (not a single buyable item).

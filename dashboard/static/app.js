@@ -57,8 +57,10 @@ async function loadSummary() {
   $("empty").classList.add("hidden");
   $("hist-indicator").classList.toggle("hidden", !!s.is_latest);
   $("last-scan").textContent = (s.is_latest ? "Last scan: " : "Scan: ") + (s.last_scan_ts || "—").replace("T", " ");
-  // Genuine free = $0 AND not flagged as false-free (trade / sale / mislist / dealer ad).
-  const freeFinds = allListings.filter((r) => r.price_usd === 0 && !r.false_free).length;
+  // Genuine free = $0 AND not a sale/mislist/sold/ad/broken.
+  const freeFinds = allListings.filter((r) =>
+    r.price_usd === 0 && !r.false_free && !r.price_in_description &&
+    !r.sold && !r.is_advertisement && !r.for_parts).length;
   $("kpis").innerHTML = [
     kpiCard("Deals found", s.deals_count, "emerald", "buy-worthy margin"),
     kpiCard("Potential profit", fmtUsd(s.total_potential_profit), "emerald", "sum of est. profit"),
@@ -204,7 +206,12 @@ function applyFilter() {
   let rows = allListings;
   if (currentFilter === "deal") rows = allListings.filter((r) => r.verdict === "deal");
   else if (currentFilter === "review") rows = allListings.filter((r) => r.verdict === "review");
-  else if (currentFilter === "free") rows = allListings.filter((r) => r.price_usd === 0 && !r.false_free);
+  else if (currentFilter === "free")
+    // Genuine free only: drop sales/mislists (false_free or real price in text), sold,
+    // dealer ads, and broken/damaged items.
+    rows = allListings.filter((r) =>
+      r.price_usd === 0 && !r.false_free && !r.price_in_description &&
+      !r.sold && !r.is_advertisement && !r.for_parts);
   render(rows);
 }
 

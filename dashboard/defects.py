@@ -76,6 +76,16 @@ _DEFECT_TOOL = {
             },
             "has_defects": {"type": "boolean", "description": "true if any defect/wear/fault is mentioned or implied"},
             "for_parts_or_broken": {"type": "boolean", "description": "true if sold as-is / not working / for parts / repair"},
+            "damaged_needs_repair": {
+                "type": "boolean",
+                "description": (
+                    "true if the item is broken, cracked, damaged, or needs repair/replacement parts "
+                    "to be fully functional or cleanly resellable — INCLUDING fixable damage and items "
+                    "with a 'story' (e.g. 'kid threw a toy, screen has lines and cracks', 'cracked "
+                    "screen but still works', 'good for parts or if you can fix it'). false for only "
+                    "minor cosmetic wear (light scratches/scuffs) that doesn't impair use."
+                ),
+            },
             "severity": {
                 "type": "string",
                 "enum": ["none", "low", "medium", "high"],
@@ -99,7 +109,7 @@ _DEFECT_TOOL = {
         },
         "required": [
             "listing_intent", "genuinely_free", "availability", "price_in_description",
-            "has_defects", "for_parts_or_broken", "severity", "refurb_needed",
+            "has_defects", "for_parts_or_broken", "damaged_needs_repair", "severity", "refurb_needed",
             "defects", "risk_flags", "condition_summary",
         ],
     },
@@ -127,6 +137,7 @@ _EMPTY = {
     "price_in_description": 0,
     "has_defects": False,
     "for_parts_or_broken": False,
+    "damaged_needs_repair": False,
     "severity": "none",
     "refurb_needed": False,
     "defects": [],
