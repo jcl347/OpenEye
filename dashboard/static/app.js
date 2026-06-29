@@ -91,12 +91,48 @@ function loadVerdictChart() {
 }
 
 async function loadProducts() {
-  const products = await getJSON(withScan("/api/products"));
+  // The selector groups by broad CATEGORY (Monitor, Laptop, GPU…) plus an "All" option.
+  const cats = await getJSON(withScan("/api/categories"));
   const sel = $("product-select");
-  sel.innerHTML = products.map((p) => `<option value="${encodeURIComponent(p.canonical_key)}">${p.canonical_name || p.canonical_key} (${p.n_listings})</option>`).join("");
+  sel.innerHTML = ['<option value="All">All categories</option>']
+    .concat(cats.map((c) => `<option value="${encodeURIComponent(c)}">${c}</option>`))
+    .join("");
   historyChart = historyChart || echarts.init($("history-chart"));
-  if (products.length) loadHistory(products[0].canonical_key);
-  else historyChart.setOption({ title: { text: "No products yet", left: "center", top: "center", textStyle: { color: "#475569", fontSize: 13 } } });
+  loadProfitHistory("All");
+}
+
+async function loadProfitHistory(category) {
+  const rows = await getJSON("/api/profit_history" + (category && category !== "All" ? "?category=" + encodeURIComponent(category) : ""));
+  const pts = rows.map((r) => ({ value: [r.ts.replace("T", " "), Math.round(r.profit)], deals: r.deals }));
+  historyChart = historyChart || echarts.init($("history-chart"));
+  const label = category === "All" ? "All categories" : category;
+  historyChart.off("click");
+  historyChart.setOption(
+    {
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: "rgba(15,23,42,.95)", borderColor: "#334155", textStyle: { color: "#e2e8f0" },
+        formatter: (ps) => {
+          const p = ps[0];
+          return `<b>${label}</b><br/>Expected profit: <b>$${Number(p.value[1]).toLocaleString()}</b>`
+            + `<br/>${(p.data && p.data.deals) || 0} deal(s)<br/><span style="color:#94a3b8">${p.value[0]}</span>`;
+        },
+      },
+      legend: { show: false },
+      grid: { left: 60, right: 20, top: 20, bottom: 40 },
+      xAxis: { type: "category", ...darkAxis() },
+      // Auto-scale Y to the selected category's range so small categories are readable.
+      yAxis: { type: "value", scale: true, ...darkAxis(), axisLabel: { color: "#94a3b8", formatter: "${value}" } },
+      graphic: pts.length ? [] : [{ type: "text", left: "center", top: "center",
+        style: { text: "No profit history yet — run more scans", fill: "#475569", fontSize: 13 } }],
+      series: [{
+        name: "Expected profit", type: "line", data: pts, smooth: true, symbolSize: 9,
+        areaStyle: { color: "rgba(52,211,153,.12)" },
+        lineStyle: { color: "#34d399", width: 3 }, itemStyle: { color: "#34d399" },
+      }],
+    },
+    { replaceMerge: ["graphic", "series"] }
+  );
 }
 
 async function loadHistory(key) {
@@ -284,7 +320,7 @@ $("scan-select").addEventListener("change", (e) => {
   currentScanId = e.target.selectedIndex === 0 ? null : Number(e.target.value);
   refresh();
 });
-$("product-select").addEventListener("change", (e) => loadHistory(decodeURIComponent(e.target.value)));
+$("product-select").addEventListener("change", (e) => loadProfitHistory(decodeURIComponent(e.target.value)));
 $("filter-tabs").addEventListener("click", (e) => {
   const f = e.target.getAttribute("data-f");
   if (!f) return;

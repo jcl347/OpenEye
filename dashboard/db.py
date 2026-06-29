@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS listings (
     availability    TEXT,                        -- available | sold | pending | unavailable
     price_in_description REAL,                   -- real asking price found in the description, if any
     price_dropped_to_zero INTEGER DEFAULT 0,     -- was priced > 0 in a prior scan, now $0
-    sold            INTEGER DEFAULT 0
+    sold            INTEGER DEFAULT 0,
+    category        TEXT                          -- broad product category for grouping
 );
 
 -- Per-listing price memory across scans (survives the per-scan listings churn).
@@ -119,6 +120,7 @@ _LISTINGS_MIGRATIONS = {
     "price_in_description": "REAL",
     "price_dropped_to_zero": "INTEGER DEFAULT 0",
     "sold": "INTEGER DEFAULT 0",
+    "category": "TEXT",
 }
 
 
@@ -171,8 +173,8 @@ def ingest_report(report: dict[str, Any]) -> int:
                        detail_checked, defect_severity, defect_summary, defects_json, for_parts,
                        listing_intent, genuinely_free, false_free,
                        is_advertisement, availability, price_in_description,
-                       price_dropped_to_zero, sold)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       price_dropped_to_zero, sold, category)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     scan_id, ts, r.get("query"), r.get("listing_id"), r.get("title"),
                     r.get("canonical_key"), r.get("canonical_name"), r.get("brand"),
@@ -190,6 +192,7 @@ def ingest_report(report: dict[str, Any]) -> int:
                     int(bool(r.get("is_advertisement"))), r.get("availability"),
                     r.get("price_in_description"),
                     int(bool(r.get("price_dropped_to_zero"))), int(bool(r.get("sold"))),
+                    r.get("category"),
                 ),
             )
 
@@ -355,6 +358,62 @@ def clear_all() -> dict[str, int]:
         except sqlite3.OperationalError:
             pass
     return counts
+
+
+def get_categories(scan_id: Optional[int] = None) -> list[str]:
+    """Distinct product categories present in a scan (for the profit-history selector)."""
+    with connect() as conn:
+        sid = _resolve_scan_id(conn, scan_id)
+        if sid is None:
+            return []
+        rows = conn.execute(
+            """SELECT category, COUNT(*) n FROM listings
+               WHERE scan_id=? AND category IS NOT NULL AND category != ''
+               GROUP BY category ORDER BY n DESC""",
+            (sid,),
+        ).fetchall()
+        return [r["category"] for r in rows]
+
+
+def get_profit_history(category: Optional[str] = None) -> list[dict[str, Any]]:
+    """Expected-profit-over-time: per scan, the total est. profit of DEALS, optionally
+    filtered to one category. 'All' (category=None) sums across categories."""
+    with connect() as conn:
+        sql = (
+            "SELECT s.ts AS ts, COALESCE(SUM(l.est_profit), 0) AS profit, COUNT(*) AS deals "
+            "FROM scans s LEFT JOIN listings l "
+            "  ON l.scan_id = s.id AND l.verdict = 'deal' AND l.est_profit IS NOT NULL "
+        )
+        params: list[Any] = []
+        if category and category != "All":
+            sql += "AND l.category = ? "
+            params.append(category)
+        sql += "GROUP BY s.id ORDER BY s.ts"
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def backfill_categories(categorizer) -> int:
+    """Retroactively categorize listings with no category. `categorizer` takes a list of
+    product names and returns a list of categories. Returns the number of rows updated."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT DISTINCT canonical_name FROM listings
+               WHERE (category IS NULL OR category = '')
+                     AND canonical_name IS NOT NULL AND canonical_name != ''"""
+        ).fetchall()
+        names = [r["canonical_name"] for r in rows]
+    if not names:
+        return 0
+    cats = categorizer(names)
+    updated = 0
+    with connect() as conn:
+        for name, cat in zip(names, cats):
+            cur = conn.execute(
+                "UPDATE listings SET category=? WHERE canonical_name=? AND (category IS NULL OR category='')",
+                (cat, name),
+            )
+            updated += cur.rowcount
+    return updated
 
 
 def get_history(canonical_key: str) -> list[dict[str, Any]]:

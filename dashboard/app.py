@@ -59,6 +59,16 @@ def api_history(key: str) -> JSONResponse:
     return JSONResponse(db.get_history(key))
 
 
+@app.get("/api/categories")
+def api_categories(scan_id: int | None = None) -> JSONResponse:
+    return JSONResponse(db.get_categories(scan_id))
+
+
+@app.get("/api/profit_history")
+def api_profit_history(category: str | None = None) -> JSONResponse:
+    return JSONResponse(db.get_profit_history(category))
+
+
 @app.get("/api/scan/status")
 def api_scan_status() -> JSONResponse:
     # Reflect the ACTUAL process state via poll() — self-correcting, never gets stuck.

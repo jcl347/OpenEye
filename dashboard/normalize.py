@@ -33,6 +33,14 @@ except Exception:
 # Fast + cheap is plenty for attribute extraction.
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
+# Broad product categories for grouping in the dashboard (the graph groups by these
+# instead of hyper-specific names like '32" 1080p 165Hz Gaming Monitor').
+CATEGORIES = [
+    "GPU", "Laptop", "Desktop PC", "Phone", "Tablet", "Monitor", "TV",
+    "Headphones & Audio", "Camera & Lens", "Game Console", "Wearable",
+    "Power Station & Battery", "Drone", "Other",
+]
+
 _EXTRACT_TOOL = {
     "name": "record_products",
     "description": "Return the normalized product identity for every input listing, in order.",
@@ -67,6 +75,11 @@ _EXTRACT_TOOL = {
                             "type": "boolean",
                             "description": "true if this is a DEALER / STOREFRONT / solicitation post, not one specific item: tells include 'selling X for all budgets', 'all budgets and needs', 'custom builds', 'I build and sell', 'message/DM me for pricing', 'any budget', multiple builds/tiers. These are not a single buyable listing.",
                         },
+                        "category": {
+                            "type": "string",
+                            "enum": CATEGORIES,
+                            "description": "Broad product category for dashboard grouping. 'Other' if none fit.",
+                        },
                         "canonical_name": {
                             "type": "string",
                             "description": "Clean human-readable product name, e.g. 'Sony A7 IV (body)'.",
@@ -79,7 +92,7 @@ _EXTRACT_TOOL = {
                     "required": [
                         "index", "brand", "model", "variant", "condition",
                         "is_part_or_accessory", "is_wanted_ad", "is_advertisement",
-                        "canonical_name", "ebay_query",
+                        "category", "canonical_name", "ebay_query",
                     ],
                 },
             }
@@ -121,6 +134,7 @@ def _neutral(title: str) -> dict[str, Any]:
         "is_part_or_accessory": False,
         "is_wanted_ad": False,
         "is_advertisement": False,
+        "category": "Other",
         "canonical_name": t,
         "ebay_query": t,
     }
@@ -136,6 +150,7 @@ def _normalize_record(raw: dict[str, Any], title: str) -> dict[str, Any]:
         "is_part": bool(raw.get("is_part_or_accessory", False)),
         "is_wanted_ad": bool(raw.get("is_wanted_ad", False)),
         "is_advertisement": bool(raw.get("is_advertisement", False)),
+        "category": raw.get("category") or "Other",
         "canonical_name": raw.get("canonical_name", "") or title,
         "ebay_query": (raw.get("ebay_query", "") or title).strip(),
     }
@@ -210,6 +225,67 @@ def optimize_queries(queries: list[str], model: Optional[str] = None) -> list[st
     except Exception as e:
         print(f"[optimize] LLM unavailable ({type(e).__name__}: {e}); using queries as-is.")
         return list(queries)
+
+
+_CATEGORIZE_TOOL = {
+    "name": "categorize",
+    "description": "Assign each product name a broad category, in order.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "category": {"type": "string", "enum": CATEGORIES},
+                    },
+                    "required": ["index", "category"],
+                },
+            }
+        },
+        "required": ["items"],
+    },
+}
+
+
+def categorize_titles(names: list[str], model: Optional[str] = None) -> list[str]:
+    """Assign a broad CATEGORIES value to each product name (for retroactive backfill).
+
+    Returns a list aligned to `names` ('Other' fallback). One batched API call per ~200.
+    """
+    if not names:
+        return []
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return ["Other"] * len(names)
+    out = ["Other"] * len(names)
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+        for start in range(0, len(names), 150):
+            chunk = names[start : start + 150]
+            numbered = "\n".join(f"{i}: {n}" for i, n in enumerate(chunk))
+            msg = client.messages.create(
+                model=model or DEFAULT_MODEL,
+                max_tokens=4096,
+                system="Classify each product into one broad category. Reason about meaning, not keywords.",
+                tools=[_CATEGORIZE_TOOL],
+                tool_choice={"type": "tool", "name": "categorize"},
+                messages=[{"role": "user", "content": f"Categorize:\n{numbered}"}],
+            )
+            for block in msg.content:
+                if block.type == "tool_use":
+                    for it in block.input.get("items", []):
+                        idx = it.get("index")
+                        if isinstance(idx, int) and 0 <= idx < len(chunk) and it.get("category") in CATEGORIES:
+                            out[start + idx] = it["category"]
+        return out
+    except Exception as e:
+        print(f"[categorize] LLM unavailable ({type(e).__name__}: {e})")
+        return out
 
 
 def normalize_titles(
