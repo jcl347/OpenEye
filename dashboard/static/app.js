@@ -60,7 +60,7 @@ async function loadSummary() {
   // Genuine free = $0 AND not a sale/mislist/sold/ad/broken.
   const freeFinds = allListings.filter((r) =>
     r.price_usd === 0 && !r.false_free && !r.price_in_description &&
-    !r.sold && !r.is_advertisement && !r.for_parts).length;
+    !r.sold && !r.is_advertisement && !r.for_parts && !r.is_wanted_ad && !r.is_part).length;
   $("kpis").innerHTML = [
     kpiCard("Deals found", s.deals_count, "emerald", "buy-worthy margin"),
     kpiCard("Potential profit", fmtUsd(s.total_potential_profit), "emerald", "sum of est. profit"),
@@ -211,7 +211,7 @@ function applyFilter() {
     // dealer ads, and broken/damaged items.
     rows = allListings.filter((r) =>
       r.price_usd === 0 && !r.false_free && !r.price_in_description &&
-      !r.sold && !r.is_advertisement && !r.for_parts);
+      !r.sold && !r.is_advertisement && !r.for_parts && !r.is_wanted_ad && !r.is_part);
   render(rows);
 }
 
