@@ -1,187 +1,191 @@
-# OpenEye — Marketplace deal scanner (Seattle / Edmonds, WA)
+# OpenEye — Marketplace deal scanner
 
-Finds **Facebook Marketplace** listings near Edmonds/Seattle whose asking price is well below their
-**resale value**, where resale value comes from **eBay _sold_ comps**. Claude Code drives two MCP
-servers, scores each candidate, and writes a ranked report. You review the report and decide whether
-to act — the agent never contacts sellers or buys anything.
+OpenEye finds **Facebook Marketplace** listings whose asking price is well below their **resale
+value** — where resale value comes from **eBay _sold_ comps** — and surfaces them on a local
+**executive dashboard**. It's discovery-only: it never messages a seller or buys anything; you
+review the ranked deals and decide.
 
-> **Responsible-use note.** Scraping Facebook Marketplace is contrary to Facebook's Terms of Service
-> and may get an account restricted; using eBay/Apify data is subject to their terms too. The bundled
-> FB MCP is an educational project. Keep usage at personal scale, and you are responsible for
-> complying with all applicable terms and laws. See **Design considerations → Legal & account risk**.
+The distinguishing idea: **Claude does the judgment work.** Matching a messy title to the right
+product, deciding which eBay sales are valid comps, reading a description for defects/scams,
+vetting "free" items — all done by the LLM with structured output, not brittle keyword rules.
+
+> **Responsible use.** Scraping Facebook/eBay is contrary to their Terms of Service and can get an
+> account limited. Keep this at personal scale. You are solely responsible for complying with all
+> terms and applicable laws. See [Notes & responsible use](#notes--responsible-use).
+
+---
 
 ## How it works
 
 ```
-                 config/watchlist.yaml         .env  (FB_LOCATION_ID, tokens, paths)
-                          │                       │
-                          ▼                       ▼
-  Windows Task Scheduler ─▶ scripts/scan.ps1 ─▶ claude -p  ──reads──▶ CLAUDE.md (scan logic)
-  (or run on demand)                              │  │
-                          ┌─────────────────────-─┘  └────────────────────┐
-                          ▼                                               ▼
-        mcp__facebook-marketplace  (local, Playwright,           mcp__ebay-sold-comps
-         logged-in Chromium @ :8000)                              (Apify-hosted, sold prices)
-                          │                                               │
-                          └───────────────► score & rank ◄───────────────┘
+  config/watchlist.yaml ──┐
+   (what to hunt for)      │
+                           ▼
+   Facebook scrape ──▶ LLM normalize ──▶ eBay sold comps ──▶ score ──▶ LLM read details ──▶ dashboard
+   (priced + free)     (title→product)   (LLM-filtered to     (profit,    (defects, intent,   (KPIs, ranked
+                                          the exact product)   confidence)  sold, lots)         deals, charts)
                                                   │
                                                   ▼
-                                  reports/<ts>.md + .json   (+ state/seen_listings.json)
+                                  data/openeye.db  +  reports/<ts>.{md,json}
 ```
 
-The scan logic lives in [CLAUDE.md](CLAUDE.md). The scripts only start the MCP and invoke Claude with that playbook.
+Two scrapers (Facebook + eBay) feed a Python pipeline that normalizes, values, scores, and persists
+every candidate to SQLite, then a small web app serves the dashboard at **http://127.0.0.1:8500**.
 
-## Prerequisites
+---
 
-- **Claude Code** CLI, authenticated (subscription login, or `ANTHROPIC_API_KEY` in `.env`).
-- **Python + [uv](https://docs.astral.sh/uv/)** to run the Facebook MCP.
-- A local clone of the FB MCP: `git clone https://github.com/fisheyes/mcp-facebook-market-place`.
-  Its first run installs a headless Chromium; you must **log in to Facebook once** in that profile.
-- An **Apify account + API token** for the eBay sold-comps MCP (per-call cost), _or_ swap in another
-  comp source (see Design considerations).
+## MCP servers
 
-## Setup
+OpenEye composes **two local [MCP](https://modelcontextprotocol.io) servers** — one per data
+source — each wrapping a headless-browser scraper. They're deliberately built differently to match
+what each needs:
 
-1. **Clone the FB MCP** somewhere and note the path.
-2. **Copy env + fill it in:** `Copy-Item .env.example .env`, then set `FB_MCP_DIR`, `FB_LOCATION_ID`,
-   `APIFY_TOKEN`, and `EBAY_MCP_ACTOR`. (`.env` is gitignored.)
-3. **Activate MCP config:** review [mcp.example.json](mcp.example.json), then copy it to `.mcp.json`.
-   It pulls secrets from your environment via `${VAR}` — it stores no secrets itself. Confirm that
-   the `ebay-sold-comps` entry (which sends a bearer token to `apify.com`) is acceptable to you, or
-   replace it with your chosen comp source.
-4. **Export env vars for MCP interpolation.** Claude Code expands `${VAR}` in `.mcp.json` from the
-   **process environment**, not from `.env` automatically. Either set them as Windows user env vars,
-   or let `scripts/scan.ps1` load `.env` for you (it does this before invoking Claude).
-5. **Start the FB MCP and log in:** `powershell -ExecutionPolicy Bypass -File scripts\start-fb-mcp.ps1`.
-   On first run, complete the Facebook login / dismiss warnings in the Chromium window the MCP opens,
-   so the session persists.
-6. **Approve the MCP servers once (interactive).** Run `claude` in this folder and let it run a scan;
-   the first time, Claude asks you to approve the two project MCP servers — approve them. This records
-   your approval in `.claude/settings.local.json`, after which **headless scans run without prompting**.
-   (Headless runs cannot approve MCP servers, so this one-time interactive step is required.)
+| | **facebook-marketplace** | **ebay-sold-comps** |
+|---|---|---|
+| Role | Find listings to evaluate | Value them via sold comps |
+| Transport | **HTTP** service (`127.0.0.1:8000`) | **stdio** (launched on demand) |
+| Lifecycle | Long-lived; owns a persistent browser session | Spawned per scan, then exits |
+| Origin | Third-party clone, **patched** (see `patches/`) | **Bundled** (`mcp/ebay-sold-comps`) |
+| Cost / secret | None (your own session) | None — **no API token, no per-call fee** |
 
-### Finding your Facebook `location_id`
+- **Transport matched to lifecycle.** Facebook holds a stateful browser/login → a persistent HTTP
+  service. An eBay comp lookup is a stateless one-shot → an on-demand stdio process (no port,
+  nothing to keep running).
+- **Local & self-contained.** The eBay server replaced a paid, token-based cloud comp source, so
+  nothing proprietary leaves your machine and there's no per-call cost.
+- **Two ways to reach the scrapers.** The dashboard pipeline drives the scrapers directly via their
+  command-line interface (deterministic, isolated dependencies); the same scrapers are also exposed
+  as MCP **tools** (`search_marketplace`, `get_listing_details`, `search_sold_comps`) so the
+  agent-driven path can call them conversationally.
 
-The MCP takes a **numeric** Facebook area ID, not a city name or coordinates, and its default
-(`108339199186201`) is the **UK** — you must override it.
+The Facebook MCP is a clone of [`fisheyes/mcp-facebook-market-place`](https://github.com/fisheyes/mcp-facebook-market-place)
+with OpenEye's additions applied as a reproducible patch — see [patches/](patches/).
 
-1. In a logged-in browser, open `https://www.facebook.com/marketplace/seattle/` and use the location
-   picker to set your area (e.g., Seattle) and the search radius.
-2. Look at the resulting URL — `…/marketplace/<NUMERIC_ID>/…` — and copy `<NUMERIC_ID>` into
-   `FB_LOCATION_ID`.
+---
 
-**Radius:** the MCP's `search_marketplace` has **no radius parameter**, so radius is whatever default
-the chosen area uses (Facebook's city default of ~40 mi from Seattle already covers Edmonds, Everett,
-Bellevue, and Tacoma). To set an explicit wide radius, patch the MCP's `scraper.py` to append
-`&radius=<miles>` (and lat/long) to the marketplace search URL it builds — see Design considerations.
+## Quick start (deploy)
 
-## Running
+Full step-by-step (with the exact commands and troubleshooting) is in
+**[GETTING_STARTED.md](GETTING_STARTED.md)**. The short version:
 
-**On demand** (interactive):
-```
-claude "Run the Facebook Marketplace deal scan per CLAUDE.md."
+**1. Prerequisites**
+- **Windows + PowerShell**, **[uv](https://docs.astral.sh/uv/)**, and an **`ANTHROPIC_API_KEY`**
+  (the pipeline calls Claude directly).
+- A clone of the Facebook MCP (patched by OpenEye).
+
+**2. Clone the Facebook MCP and apply OpenEye's patch**
+```powershell
+git clone https://github.com/fisheyes/mcp-facebook-market-place C:\path\to\mcp-facebook-market-place
+cd C:\path\to\mcp-facebook-market-place
+git apply C:\path\to\OpenEye\patches\fb-mcp-openeye.patch
 ```
 
-**Headless / scheduled** — `scripts/scan.ps1` loads `.env`, then runs Claude non-interactively with
-only the tools the scan needs allow-listed:
+**3. Configure `.env`** (gitignored — never committed)
+```powershell
+Copy-Item .env.example .env      # then edit:
+#   ANTHROPIC_API_KEY = your Claude API key
+#   FB_MCP_DIR        = path to the FB MCP clone above
+#   FB_LOCATION_ID    = your search area (a city slug like "seattle" works; numeric IDs work too)
 ```
-powershell -ExecutionPolicy Bypass -File scripts\scan.ps1
+
+**4. Install dependencies** (corporate proxy? add `--native-tls`)
+```powershell
+cd C:\path\to\mcp-facebook-market-place ; uv sync ; uv run playwright install chromium
+cd C:\path\to\OpenEye\mcp\ebay-sold-comps ; uv sync
+cd C:\path\to\OpenEye\dashboard ; uv sync          # pinned to Python 3.12
 ```
-Make sure the FB MCP from step 5 is already running (it must stay up, with a valid login), and that
-you completed the one-time MCP approval in setup step 6.
 
-**Schedule it** (a few times a day — deals move fast). Register a Windows Scheduled Task that runs
-the scan at 8am / 12pm / 6pm:
+**5. Start the Facebook MCP and log in once**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-fb-mcp.ps1
 ```
-powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1
-# add -WithMcpAutostart to also launch the FB MCP at logon:
-powershell -ExecutionPolicy Bypass -File scripts\register-task.ps1 -WithMcpAutostart
+A Chromium window opens — log in to Facebook, dismiss warnings, and leave it running.
+
+**6. Run a scan + open the dashboard**
+```powershell
+cd C:\path\to\OpenEye\dashboard
+uv run python pipeline.py        # one scan -> SQLite + reports/
+uv run python app.py             # serve the dashboard
 ```
-The task runs as you, **only while you're logged on** — required, because the FB MCP needs your
-desktop browser session. A Claude cloud routine can't do this (it has no access to that browser),
-which is why this is a local Windows deployment — see Design considerations.
+Open **http://127.0.0.1:8500**. Or skip the first command and click **Run scan** in the dashboard —
+it runs the same pipeline and refreshes when done.
 
-## Output
+> **Set your area** in `FB_LOCATION_ID`. It defaults to nothing useful out of the box; a city slug
+> (e.g. `seattle`, `austin`, `chicago`) works because the scraper drops it straight into the
+> Marketplace URL. Facebook's default radius for an area covers the surrounding metro.
 
-- `reports/<YYYY-MM-DD-HHMM>.md` — `✅ Deals` and `⚠️ Review` tables, ranked by estimated profit.
-- `reports/<YYYY-MM-DD-HHMM>.json` — same data, machine-readable.
-- `state/seen_listings.json` — dedup memory so you aren't re-alerted on the same listing.
+---
 
-`reports/` and `state/` are gitignored (they can contain seller names/locations).
+## Two ways to run
 
-## Design considerations
+- **Dashboard pipeline (recommended)** — `dashboard/pipeline.py`: a deterministic Python pipeline
+  with the LLM in the loop only for judgment (normalization, comp curation, description reading).
+  Persists to SQLite and powers the dashboard. This is the primary interface.
+- **Agent-driven** — [CLAUDE.md](CLAUDE.md) is a scan playbook an LLM can execute directly via the
+  MCP tools (`claude "Run the Facebook Marketplace deal scan per CLAUDE.md."`). Good for ad-hoc runs;
+  the scripts in `scripts/` wrap this for headless/scheduled use.
 
-**Legal & account risk.** Marketplace scraping violates Facebook's ToS; an account used for it can be
-warned, throttled, or banned. Public-data scraping legality is unsettled and jurisdiction-dependent —
-this tool is for personal, educational use, and you accept that risk. Don't use a stranger's account,
-and don't scale this into bulk/commercial harvesting.
+---
 
-**Why it's a *local* deployment (not a Claude cloud routine).** The FB MCP drives a **persistent,
-logged-in Chromium** profile on one machine. A cloud-scheduled agent has no access to that browser
-session, so scans must run on the machine holding the login. Hence Windows Task Scheduler + a
-long-running local MCP, rather than a hosted routine.
+## Configuration
 
-**Search radius is approximate.** The MCP exposes only `location_id`, not a radius. We anchor on a
-Seattle-area ID and lean on Facebook's ~40 mi city default to cover Edmonds. Precise radius/centering
-requires patching the scraper's URL builder. Document any change so results stay interpretable.
+- **`config/watchlist.yaml`** — the curated watchlist (electronics-led) + a broad **discovery**
+  sweep ("find any items"), plus the deal **thresholds** (`max_asking_ratio`, `min_profit_usd`,
+  `min_comp_samples`, fees/shipping, resale haircut). Per-item keys override the defaults.
+- **`.env`** — `ANTHROPIC_API_KEY`, `FB_MCP_DIR`, `FB_LOCATION_ID`, and optional knobs
+  (`FB_PROFILE_DIR` for a persistent login, `FB_RADIUS_KM`/`FB_LAT`/`FB_LNG` for a wider area).
+- **`.mcp.json`** — copy from [mcp.example.json](mcp.example.json); declares the two MCP servers and
+  contains no secrets (it interpolates `${VAR}` from your environment).
 
-**Prices are free-text strings.** The MCP returns `price` like `"$1,200"`, `"Free"`, or possibly a
-non-USD symbol if the location is misconfigured. Normalization (and a currency sanity check) is part
-of the scan; `$0`/non-numeric items are excluded rather than treated as infinite margin.
+---
 
-**Resale comps: sold ≠ asking.** Resale value must come from **sold** comps, not active asking prices,
-or every estimate is inflated. The accuracy bottleneck is **matching** a messy listing title to the
-right comp (model variant, condition, bundle vs. single). We require a minimum sample size and demote
-thin/uncertain matches to *Review*.
+## Using the dashboard
 
-**Fees, shipping & true margin.** Median sold price isn't take-home. The score subtracts assumed
-platform/payment fees (~13%) and shipping, per category. Real margin also includes repair/refurb, your
-time, and risk — treat the number as a screen, not a guarantee. Local-resale categories set shipping to 0.
+- **KPI band + FB→eBay comparison** at the top; **ranked opportunities** table (Deals / Review /
+  Free / All); an **Expected-profit** chart with clickable bubbles.
+- Each deal shows the asking price vs. the eBay sold median (and comp count), a condition/defect
+  read, and badges (GPU, lot, bundle, genuine-free, sold, etc.).
+- **Multi-item lots** are decomposed — each item in the listing is valued against eBay individually.
+- **Run scan** triggers a fresh scan in the background and auto-refreshes; **Clear history** wipes
+  the database behind a typed confirmation.
 
-**Scams & false positives.** A too-good-to-be-true ratio usually means a scam, stolen goods, a wrong
-comp match, or a parts-only item — not free money. Such listings are routed to **Review** and never
-auto-ranked as Deals. Always eyeball the listing before acting.
+---
 
-**Rate limiting & detection.** Headless scraping that hammers the site invites blocks and CAPTCHAs.
-Keep the watchlist modest, pace requests, and rely on the persistent profile to avoid frequent
-re-logins. Expect occasional empty results when Facebook shows a wall — the agent stops and asks you
-to re-login rather than spinning.
+## Notes & responsible use
 
-**Alert fatigue & dedup.** `state/seen_listings.json` suppresses repeat alerts unless price drops
-> 10%. Tune thresholds per category in `config/watchlist.yaml` so the report stays signal-dense.
+- **Legal / account risk.** Marketplace scraping violates Facebook's ToS and can get an account
+  warned or banned; eBay scraping is likewise against its terms. Personal/educational scale only —
+  don't bulk-harvest, and you accept the risk.
+- **Anti-bot is best-effort.** The eBay scraper warms up cookies, hides the automation fingerprint,
+  and paces requests with jitter; FB concurrency is kept gentle by default. This clears *soft*
+  heuristics, not serious anti-bot — expect occasional empty results when a site shows a wall.
+- **Logged-out coverage is shallow.** Anonymous Facebook returns ~one page per search; OpenEye
+  compensates with breadth (many discovery queries). A persistent-login mode is built but **opt-in**
+  (`FB_PROFILE_DIR` + `scraper.py --login`) because logged-in scraping raises account risk.
+- **Sold ≠ asking.** Resale value comes only from **sold** comps; an LLM pass keeps only the exact
+  same product so the median isn't polluted by parts or wrong models. Pricing is conservative
+  (fees + shipping + a quick-sale haircut). Treat every number as a screen, not a guarantee.
+- **Untrusted content.** Listing/comp text is attacker-controllable; it's treated as data, never
+  instructions. Secrets are never printed; `reports/`, `data/`, `.env`, and `.mcp.json` are gitignored.
 
-**Cadence & freshness.** Good deals sell within minutes-to-hours. More frequent scans catch more but
-raise detection risk and cost. A few runs/day with `days: 7` recency is a sane default; tighten to
-`days: 1` if you scan often.
-
-**Cost.** Apify comp calls and Claude tokens both cost money per run; the watchlist size bounds both.
-Start small.
-
-**Privacy.** Reports can contain seller names, neighborhoods, and listing photos' URLs. They're
-gitignored; don't commit or share them, and prune old ones.
-
-**Prompt-injection.** Listing text is attacker-controllable input to an LLM. CLAUDE.md instructs the
-agent to treat all scraped text as data, never as instructions — keep that rule if you edit the playbook.
-
-**Extensibility.** The comp source is pluggable: swap the Apify actor for the official **eBay Browse /
-Marketplace Insights API** (ToS-cleaner, but access is gated), or another MCP. Add notifications
-(email via a Gmail MCP, or a Discord webhook) at the end of the scan. If you ever want Claude out of
-the hot loop, the pure price-parse + scoring logic in CLAUDE.md can be reimplemented as a script.
+---
 
 ## Repository layout
 
 | Path | Purpose |
 |------|---------|
-| [CLAUDE.md](CLAUDE.md) | The scan playbook the agent follows (source of truth for logic). |
-| [config/watchlist.yaml](config/watchlist.yaml) | What to search for + per-category deal thresholds. |
-| [mcp.example.json](mcp.example.json) | MCP server template — review, copy to `.mcp.json` to activate. |
-| [.env.example](.env.example) | Env template — copy to `.env` and fill in. |
-| `scripts/start-fb-mcp.ps1` | Start the local Facebook MCP (first run: log in once). |
-| `scripts/scan.ps1` | Load `.env`, run one headless scan via Claude. |
-| `scripts/register-task.ps1` | Register the recurring Windows Scheduled Task. |
-| `reports/`, `state/` | Runtime output + dedup memory (gitignored). |
+| [dashboard/](dashboard/) | The pipeline + FastAPI server + dashboard (the primary interface). |
+| [dashboard/pipeline.py](dashboard/pipeline.py) | Orchestrator: scrape → normalize → comp → score → read → persist. |
+| [dashboard/normalize.py](dashboard/normalize.py) · [comps.py](dashboard/comps.py) · [defects.py](dashboard/defects.py) | The LLM judgment steps (normalization, comp relevance, description reading). |
+| [mcp/ebay-sold-comps/](mcp/ebay-sold-comps/) | The bundled local eBay sold-comps MCP (no token, no cost). |
+| [patches/](patches/) | OpenEye's patch for the third-party Facebook MCP. |
+| [config/watchlist.yaml](config/watchlist.yaml) | What to search for + deal thresholds + discovery sweep. |
+| [CLAUDE.md](CLAUDE.md) | The agent-driven scan playbook (alternate run path). |
+| [GETTING_STARTED.md](GETTING_STARTED.md) | Full setup, usage, and troubleshooting. |
+| `scripts/` | Start the FB MCP, run a headless scan, register a scheduled task. |
+| `reports/`, `data/` | Runtime output + SQLite (gitignored). |
 
 ## Disclaimer
 
-Provided for educational and personal use. No warranty. You are responsible for complying with the
-Terms of Service of Facebook, eBay, Apify, and any other service, and with all applicable laws.
+Provided for educational and personal use, with no warranty. You are responsible for complying with
+the Terms of Service of Facebook, eBay, and any other service, and with all applicable laws.
